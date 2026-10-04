@@ -2,6 +2,12 @@ import { z } from "zod";
 import { answerLocal } from "@/lib/assistant";
 import { KB_SECTIONS, type KbSection } from "@/lib/kb";
 import { getKbChunks, getKbStatus } from "@/lib/kbStore";
+import {
+  aiMode,
+  callChatCompletions,
+  liveConfig,
+  missingCredentialResponse,
+} from "@/lib/provider";
 
 const chatSchema = z.object({
   threadId: z.string().min(1),
@@ -128,5 +134,38 @@ export async function POST(req: Request) {
     requestId,
     sections,
   );
-  return Response.json({ ...result, kbSource });
+
+  // AI_MODE=mock (mặc định demo): engine mô phỏng nội bộ, citations từ nguồn thực.
+  if (aiMode() === "mock") return Response.json({ ...result, mode: "mock", kbSource });
+
+  // AI_MODE=live: provider thật với context text đã trích xuất; sources vẫn từ
+  // retrieval có validate (không để model tự bịa URL).
+  const cfg = liveConfig();
+  if (!cfg) return missingCredentialResponse(requestId);
+  const pool =
+    parsed.data.scopeIds.lessonId != null
+      ? sections.filter((s) => s.lessonId === parsed.data.scopeIds.lessonId)
+      : sections;
+  const ctx = (pool.length > 0 ? pool : sections)
+    .slice(0, 6)
+    .map((s) => `[${s.title} | tr.${s.page}] ${s.text.slice(0, 600)}`)
+    .join("\n---\n");
+  const quoteCtx = (parsed.data.scopeIds.quotes ?? []).slice(0, 5).join("\n");
+  const prov = await callChatCompletions(cfg.model, [
+    {
+      role: "system",
+      content:
+        "Bạn là trợ giảng tiếng Việt. Dùng tài liệu được cung cấp trong phạm vi người học đã chọn. Nêu đúng nguồn hỗ trợ kết luận; thiếu nguồn thì nói rõ.",
+    },
+    {
+      role: "user",
+      content: `Phạm vi: ${parsed.data.scope}.\nTài liệu:\n${ctx}\n${quoteCtx ? `Ghi chú đã chọn:\n${quoteCtx}\n` : ""}Câu hỏi: ${parsed.data.message}`,
+    },
+  ]);
+  if ("error" in prov)
+    return Response.json(
+      { code: "PROVIDER_FAILED", message: `AI live lỗi (${prov.error}) — bấm Thử lại.`, requestId },
+      { status: 502 },
+    );
+  return Response.json({ ...result, answer: prov.text, mode: "provider", model: prov.model, kbSource });
 }

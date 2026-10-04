@@ -8,6 +8,7 @@ import {
   type MindmapNoteInput,
   type MindmapProposal,
 } from "@/lib/mindmap";
+import { aiMode, missingCredentialResponse } from "@/lib/provider";
 
 // N06 — POST /api/ai/mindmap: nhận ghi chú đã lưu + phạm vi có quyền,
 // trả structured proposal nodes/edges/uncertainties. Server validate chặt:
@@ -149,40 +150,43 @@ export async function POST(req: Request) {
     })),
   ];
 
-  const prompt =
-    `Phạm vi: ${scopeTitle}.\n` +
-    clean
-      .map(
-        (n, i) =>
-          `[${i + 1} | id=${n.id} | ${n.kind ?? "text"} | tr.${n.pageNumber ?? "?"}] ${n.title ?? ""} — ${n.body ?? ""} — ${n.quote ?? ""}`,
-      )
-      .join("\n");
-  const prov = await callProviderVision(prompt);
-  if ("proposal" in prov)
-    return Response.json({
-      mode: "provider",
-      model: prov.model,
-      requestId,
-      proposal: prov.proposal,
-      sources,
-      noteCount: clean.length,
-      kbSource,
-      dropped,
-    });
-  if (prov.error !== "missing-key")
+  if (aiMode() === "live") {
+    const prompt =
+      `Phạm vi: ${scopeTitle}.\n` +
+      clean
+        .map(
+          (n, i) =>
+            `[${i + 1} | id=${n.id} | ${n.kind ?? "text"} | tr.${n.pageNumber ?? "?"}] ${n.title ?? ""} — ${n.body ?? ""} — ${n.quote ?? ""}`,
+        )
+        .join("\n");
+    const prov = await callProviderVision(prompt);
+    if ("proposal" in prov)
+      return Response.json({
+        mode: "provider",
+        model: prov.model,
+        requestId,
+        proposal: prov.proposal,
+        sources,
+        noteCount: clean.length,
+        kbSource,
+        dropped,
+      });
+    if (prov.error === "missing-key") return missingCredentialResponse(requestId);
     return Response.json(
       { code: "PROVIDER_FAILED", message: `AI ngoài lỗi (${prov.error}) — bấm Thử lại.`, requestId },
       { status: 502 },
     );
+  }
 
+  // AI_MODE=mock: proposal mô phỏng từ dữ liệu mẫu, ghi nhãn rõ.
   const proposal = buildLocalProposal(
     clean,
     scopeTitle,
     kbPool.map((s) => ({ id: s.id, title: s.title, page: s.page })),
   );
   return Response.json({
-    mode: "prototype-local",
-    model: "prototype-local",
+    mode: "mock",
+    model: "mock",
     requestId,
     proposal,
     sources,

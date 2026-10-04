@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SAMPLE_DOC_ID } from "@/lib/seed";
 import { getKbChunks, getKbStatus } from "@/lib/kbStore";
 import { KB_SECTIONS, type KbSection } from "@/lib/kb";
+import { aiMode, missingCredentialResponse } from "@/lib/provider";
 import {
   buildProviderPrompt,
   summarizeLocal,
@@ -141,19 +142,19 @@ export async function POST(req: Request) {
 
   // Provider thật (nếu có key): chỉ gửi TEXT trích xuất + prompt, không PDF.
   const prompt = buildProviderPrompt(clean, kbPool, instruction, scopeLabel);
-  const prov = await callProvider(prompt);
-  if ("text" in prov) {
-    const local = summarizeLocal(clean, kbPool, instruction, scopeLabel, scope.lessonId, requestId, kbSource);
-    return Response.json({
-      ...local,
-      mode: "provider",
-      model: prov.model,
-      draft: `${prov.text}\n\n[Nguồn: ${local.sources.length} mục — mở từng nguồn để kiểm chứng]`,
-      dropped,
-    });
-  }
-
-  if (prov.error !== "missing-key")
+  if (aiMode() === "live") {
+    const prov = await callProvider(prompt);
+    if ("text" in prov) {
+      const local = summarizeLocal(clean, kbPool, instruction, scopeLabel, scope.lessonId, requestId, kbSource);
+      return Response.json({
+        ...local,
+        mode: "provider",
+        model: prov.model,
+        draft: `${prov.text}\n\n[Nguồn: ${local.sources.length} mục — mở từng nguồn để kiểm chứng]`,
+        dropped,
+      });
+    }
+    if (prov.error === "missing-key") return missingCredentialResponse(requestId);
     // Có key nhưng provider lỗi thật → 502 để UI báo lỗi + cho retry, không fake.
     return Response.json(
       {
@@ -163,8 +164,9 @@ export async function POST(req: Request) {
       },
       { status: 502 },
     );
+  }
 
-  // Chưa có key ngoài → engine nội bộ chạy thật trên text trích xuất.
+  // AI_MODE=mock: engine mô phỏng nội bộ chạy thật trên text trích xuất.
   const result = summarizeLocal(
     clean,
     kbPool,
@@ -174,5 +176,5 @@ export async function POST(req: Request) {
     requestId,
     kbSource,
   );
-  return Response.json({ ...result, kbSource, dropped });
+  return Response.json({ ...result, mode: "mock", model: "mock", kbSource, dropped });
 }

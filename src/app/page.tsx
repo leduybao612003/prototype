@@ -288,6 +288,38 @@ function Workspace() {
   const [streamOn, setStreamOn] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const streamAbort = useRef<AbortController | null>(null);
+  // Chế độ AI từ server (mock = demo mô phỏng, live = provider thật).
+  const [aiMode, setAiMode] = useState("");
+  // Mock streaming: hiện dần câu trả lời đã có đủ (ghi rõ mô phỏng), Dừng được.
+  const [mockPlaying, setMockPlaying] = useState(false);
+  const mockTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mockMsg = useRef<{ tid: string; mid: string } | null>(null);
+
+  function stopMock() {
+    if (mockTimer.current) {
+      clearInterval(mockTimer.current);
+      mockTimer.current = null;
+    }
+    const m = mockMsg.current;
+    if (m) {
+      setThreads((prev) =>
+        prev.map((x) =>
+          x.id === m.tid
+            ? {
+                ...x,
+                messages: x.messages.map((mm) =>
+                  mm.id === m.mid && !mm.text.includes("[Đã dừng mô phỏng.]")
+                    ? { ...mm, text: `${mm.text}\n[Đã dừng mô phỏng.]` }
+                    : mm,
+                ),
+              }
+            : x,
+        ),
+      );
+      mockMsg.current = null;
+    }
+    setMockPlaying(false);
+  }
   const [comments, setComments] = useState<Record<string, LessonComment[]>>({});
   const [commentDraft, setCommentDraft] = useState("");
   const [bugs, setBugs] = useState<BugReport[]>([]);
@@ -316,6 +348,14 @@ function Workspace() {
         if (alive) setKb(s);
       } catch {
         /* offline — giữ trạng thái đang có */
+      }
+      try {
+        const res = await fetch("/api/health");
+        if (!res.ok) return;
+        const h = (await res.json()) as { aiMode?: string };
+        if (alive && h.aiMode) setAiMode(h.aiMode);
+      } catch {
+        /* bỏ qua */
       }
     })();
     return () => {
@@ -1447,6 +1487,12 @@ function Workspace() {
   async function sendAi(retryText?: string) {
     const text = (retryText ?? aiInput).trim();
     if (!text || aiBusy) return;
+    // Stream BẬT + live mode → pipe SSE thật; còn lại (kể cả mock) đi đường JSON,
+    // mock sẽ hiện dần ở dưới khi có streamOn.
+    if (streamOn && aiMode === "live" && !retryText) {
+      sendAiStream(text);
+      return;
+    }
     // Luôn gửi trong một luồng (tạo mới nếu chưa có) để mở lại sau reload.
     let tid = activeThreadId;
     if (!tid || !threads.some((x) => x.id === tid)) {
@@ -1488,14 +1534,55 @@ function Workspace() {
       });
       if (!res.ok) throw new Error(`HTTP_${res.status}`);
       const data = await res.json();
-      const reply: ChatMsg = {
-        id: newClientOperationId(),
-        role: "assistant",
-        text: data.answer as string,
-        sources: data.sources as ChatSource[],
-        requestId: data.requestId as string,
-      };
-      pushMsg(tid, reply);
+      const full = data.answer as string;
+      // Mock streaming: câu trả lời đã có đủ từ server, hiện dần từng đoạn
+      // để demo (ghi rõ mô phỏng ở nhãn mode). Dừng được, Retry giữ nguyên.
+      if (streamOn && (data as { mode?: string }).mode === "mock") {
+        const mid = newClientOperationId();
+        pushMsg(tid, {
+          id: mid,
+          role: "assistant",
+          text: "",
+          sources: data.sources as ChatSource[],
+          requestId: data.requestId as string,
+        });
+        mockMsg.current = { tid, mid };
+        setMockPlaying(true);
+        let i = 0;
+        if (mockTimer.current) clearInterval(mockTimer.current);
+        mockTimer.current = setInterval(() => {
+          i += 60;
+          const done = i >= full.length;
+          const slice = full.slice(0, i);
+          setThreads((prev) =>
+            prev.map((x) =>
+              x.id === tid
+                ? {
+                    ...x,
+                    messages: x.messages.map((m) =>
+                      m.id === mid ? { ...m, text: done ? `${slice}\n[Mô phỏng streaming]` : slice } : m,
+                    ),
+                  }
+                : x,
+            ),
+          );
+          if (done && mockTimer.current) {
+            clearInterval(mockTimer.current);
+            mockTimer.current = null;
+            mockMsg.current = null;
+            setMockPlaying(false);
+          }
+        }, 40);
+      } else {
+        const reply: ChatMsg = {
+          id: newClientOperationId(),
+          role: "assistant",
+          text: full,
+          sources: data.sources as ChatSource[],
+          requestId: data.requestId as string,
+        };
+        pushMsg(tid, reply);
+      }
     } catch {
       const err: ChatMsg = {
         id: newClientOperationId(),
@@ -1546,6 +1633,21 @@ function Workspace() {
         }}
       >
         <strong style={{ color: dark ? "#fff" : "#18558B" }}>{t.app}</strong>
+        {aiMode === "mock" && (
+          <span
+            title="AI chạy chế độ demo mô phỏng — tương tác đủ nhưng chưa gọi provider thật"
+            style={{
+              fontSize: 12,
+              padding: "2px 8px",
+              borderRadius: 10,
+              background: dark ? "#3a2c10" : "#FEF3C7",
+              color: dark ? "#fcd34d" : "#92400e",
+              border: "1px solid #b45309",
+            }}
+          >
+            AI demo mô phỏng
+          </span>
+        )}
         <span style={{ fontSize: 13, opacity: 0.8 }}>
           {SEED_COURSE.title} / {activeLesson.ch.title} / {activeLesson.lesson.title}
         </span>
@@ -2164,6 +2266,10 @@ function Workspace() {
                   <div style={{ border: `1px solid #18558B`, borderRadius: 8, padding: 8 }}>
                     <strong style={{ fontSize: 13 }}>Chuẩn hóa sơ đồ (mindmap)</strong>
                     <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Chế độ demo mô phỏng: sơ đồ dựng từ dữ liệu mẫu, có nhãn mô phỏng — không tuyên
+                      bố nhận dạng được ảnh bất kỳ. Bấm “Mở nguồn” ở từng node để đối chiếu bản gốc.
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
                       Dùng đúng ghi chú đã tick chọn ở panel Tổng hợp ({sumPool().filter((i) => !sumOff[i.id]).length} mục).
                       Liên kết suy đoán luôn cần xác nhận trước khi duyệt.
                     </div>
@@ -2350,7 +2456,9 @@ function Workspace() {
             {tab === "ai" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <p style={{ fontSize: 12, opacity: 0.75 }}>
-                  Trợ giảng prototype nội bộ — trả lời từ nội dung file mẫu, không gọi provider.
+                  {aiMode === "mock"
+                    ? "Chế độ demo mô phỏng: tương tác đầy đủ (hỏi theo phạm vi, streaming mô phỏng, dừng, thử lại, nguồn thật, lịch sử) — chưa gọi provider AI thật."
+                    : "Trợ giảng prototype nội bộ — trả lời từ nội dung file mẫu, không gọi provider."}
                 </p>
                 {vision && (
                   <div
@@ -2362,6 +2470,10 @@ function Workspace() {
                     }}
                   >
                     <strong>Hỏi AI về vùng đã khoanh (trang {vision.page})</strong>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Crop bên dưới là ảnh thật từ trang PDF. Chế độ demo mô phỏng: phản hồi ghi rõ
+                      mô phỏng, không giả vờ đã đọc chữ trong ảnh.
+                    </div>
                     <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "flex-start" }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -2540,7 +2652,7 @@ function Workspace() {
                 />
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <button
-                    onClick={() => (streamOn ? sendAiStream(aiInput) : sendAi())}
+                    onClick={() => sendAi()}
                     disabled={aiBusy || streaming}
                     style={btn(dark)}
                   >
@@ -2554,13 +2666,21 @@ function Workspace() {
                       Dừng
                     </button>
                   )}
+                  {mockPlaying && (
+                    <button
+                      onClick={stopMock}
+                      style={btn(dark)}
+                    >
+                      Dừng
+                    </button>
+                  )}
                   <label style={{ fontSize: 12 }}>
                     <input
                       type="checkbox"
                       checked={streamOn}
                       onChange={(e) => setStreamOn(e.target.checked)}
                     />{" "}
-                    Stream thật (cần provider key)
+                    Stream (thật khi live, mô phỏng khi mock)
                   </label>
                   <button
                     onClick={() => {

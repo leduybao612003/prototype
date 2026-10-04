@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getKbChunks, getKbStatus } from "@/lib/kbStore";
 import { KB_SECTIONS, type KbSection } from "@/lib/kb";
+import { aiMode } from "@/lib/provider";
 
 // F17 — POST /api/ai/vision: người học khoanh vùng → client gửi crop ẢNH VÙNG
 // (đã thu nhỏ, kèm geometry + số trang) + câu hỏi. Server tải text trang đó +
@@ -112,6 +113,29 @@ export async function POST(req: Request) {
     ...(contextNotes ?? []).map((t, i) => `Ghi chú lân cận ${i + 1}: ${t}`),
   ].join("\n");
 
+  // AI_MODE=mock: crop hiển thị là ảnh thật, nhưng phản hồi ghi rõ MÔ PHỎNG —
+  // không giả vờ đã đọc/OCR chữ trong ảnh; chỉ dùng text trang đã trích xuất.
+  if (aiMode() === "mock") {
+    const g = parsed.data.geometry;
+    const where = g
+      ? ` (x ${Math.round(g.x * 100)}%, y ${Math.round(g.y * 100)}%, ${Math.round(g.w * 100)}×${Math.round(g.h * 100)}% trang)`
+      : "";
+    const mockSources = pageSec
+      ? [{ sectionId: pageSec.id, title: pageSec.title, page: pageSec.page, lessonId: pageSec.lessonId }]
+      : [];
+    return Response.json({
+      mode: "mock",
+      model: "mock",
+      requestId,
+      answer:
+        `[MÔ PHỎNG vision — chưa đọc chữ trong ảnh crop]\n` +
+        `Vùng bạn khoanh ở trang ${pageNumber}${where} đã gửi kèm câu hỏi: “${question}”.\n\n` +
+        `Theo text đã trích xuất của trang này:\n${contextText.slice(0, 900)}\n\n` +
+        `Muốn AI đọc chữ trong ảnh thật, cấu hình AI_VISION_MODEL + key (giai đoạn tích hợp sau).`,
+      sources: mockSources,
+      kbSource,
+    });
+  }
   const prov = await callVision(question, contextText, imageDataUrl, pageNumber);
   if ("text" in prov) {
     const sources = pageSec
