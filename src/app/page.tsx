@@ -133,11 +133,11 @@ interface SupportRequest {
 const CLASSES = ["Lớp AI20k-01", "Lớp AI20k-02"];
 
 function fmtTime(iso: string) {
-  // Định dạng thủ công (không dùng toLocaleString trong render).
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())} ${p(d.getDate())}/${p(d.getMonth() + 1)}`;
+  // Cắt trực tiếp từ chuỗi ISO (UTC) — không dùng Date local để server và
+  // client format giống hệt nhau, tránh hydration mismatch.
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
+  if (!m) return iso;
+  return `${m[4]}:${m[5]} ${m[3]}/${m[2]}`;
 }
 
 function partLabel(p: LessonPart) {

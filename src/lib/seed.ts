@@ -92,7 +92,8 @@ export const LESSON_START_PAGE: Record<string, number> = {
   "blas-validation": 9,
 };
 
-const now = new Date().toISOString();
+// Timestamp cố định để server và client render giống nhau (tránh hydration mismatch).
+const now = "2026-10-05T00:00:00.000Z";
 
 function seedItem(
   id: string,
