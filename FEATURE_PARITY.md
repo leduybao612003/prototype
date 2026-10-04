@@ -64,7 +64,7 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | N02 | Mở nguồn từ note (đúng tài liệu/trang/vùng hoặc timestamp, giữ panel) | implemented (điều hướng nội bộ + deep link `?part=&page=&item=`) | thủ công |
 | N03 | Tự lưu + sync (một nguồn, idempotency, conflict, cross-tab) | implemented một phần (clientOperationId + revision check ở API stub; autosave debounce + trạng thái Đang lưu/Đã lưu/Lưu thất bại) | persistence server blocked → T13/T14 blocked |
 | N04 | Tìm kiếm note (VI có/không dấu, text/quote/metadata, empty/loading/error) | implemented (tìm local, không dấu) | thủ công; OCR ảnh không tuyên bố |
-| N05 | AI tổng hợp chủ động (chọn phạm vi → draft có nguồn → sửa/duyệt/bỏ, gốc giữ nguyên) | planned (blocked: AI + DB) | — |
+| N05 | AI tổng hợp chủ động (chọn phạm vi → draft có nguồn → sửa/duyệt/bỏ, gốc giữ nguyên) | implemented (POST /api/ai/summarize trên text trích xuất + UI chọn note/phạm vi/instruction, draft có nguồn mở đúng trang, artifact riêng, reload bền, lỗi + retry thật) | live 05/10/2026: summarize 200, 3 notes → 5 sources (tr.4/6/7/10), kbSource ingested:sample.pdf; lỗi 400/403 + retry verified |
 | N06 | Chuẩn hóa mindmap (vision thật, sửa nodes/edges, duyệt/bỏ, bản riêng) | planned, làm sau parity + sync (blocked: AI vision) | — |
 
 ## Quy tắc parity

@@ -37,6 +37,33 @@ interface ChatMsg {
   text: string;
   sources?: ChatSource[];
   requestId?: string;
+  fb?: 1 | -1;
+}
+
+interface SummaryArtifact {
+  id: string;
+  status: "pending" | "accepted" | "rejected";
+  title: string;
+  draft: string;
+  itemIds: string[];
+  createdAt: string;
+  instruction?: string;
+  mode?: string;
+  requestId?: string;
+  sources?: { kind: string; refId: string; title: string; page: number | null; lessonId: string }[];
+}
+
+interface LessonComment {
+  id: string;
+  text: string;
+  at: string;
+}
+
+interface BugReport {
+  id: string;
+  title: string;
+  desc: string;
+  at: string;
 }
 
 interface KbStage {
@@ -100,6 +127,9 @@ const SUPPORT_KEY = "vlearn-support-v1";
 const PROGRESS_KEY = "vlearn-progress-v1";
 const FEEDBACK_KEY = "vlearn-feedback-v1";
 const CONFUSE_KEY = "vlearn-confuse-v1";
+const ARTIFACT_KEY = "vlearn-artifacts-v1";
+const COMMENTS_KEY = "vlearn-comments-v1";
+const BUGS_KEY = "vlearn-bugs-v1";
 
 interface ChatThread {
   id: string;
@@ -195,6 +225,24 @@ function Workspace() {
   const [confuseKind, setConfuseKind] = useState<"kho_hieu" | "be_tac" | "da_hieu" | "">("");
   const [confuseText, setConfuseText] = useState("");
   const [confused, setConfused] = useState<Record<string, { kind: string; text: string; at: string }>>({});
+  const [artifacts, setArtifacts] = useState<SummaryArtifact[]>([]);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [draftItemIds, setDraftItemIds] = useState<string[]>([]);
+  const [sumInstruction, setSumInstruction] = useState("");
+  const [sumScope, setSumScope] = useState<"visible" | "lesson">("visible");
+  const [sumOff, setSumOff] = useState<Record<string, boolean>>({});
+  const [sumBusy, setSumBusy] = useState(false);
+  const [sumErr, setSumErr] = useState("");
+  const [sumSources, setSumSources] = useState<SummaryArtifact["sources"]>([]);
+  const [sumMode, setSumMode] = useState("");
+  const [sumRequestId, setSumRequestId] = useState("");
+  const lastPayload = useRef<{ instruction: string; scope: { lessonId: string; partId: string }; notes: object[] } | null>(null);
+  const [comments, setComments] = useState<Record<string, LessonComment[]>>({});
+  const [commentDraft, setCommentDraft] = useState("");
+  const [bugs, setBugs] = useState<BugReport[]>([]);
+  const [bugTitle, setBugTitle] = useState("");
+  const [bugDesc, setBugDesc] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(true);
@@ -299,6 +347,12 @@ function Workspace() {
       if (storedHelpful && typeof storedHelpful === "object") setHelpful(storedHelpful);
       const storedConfused = readLocal<Record<string, { kind: string; text: string; at: string }>>(CONFUSE_KEY);
       if (storedConfused && typeof storedConfused === "object") setConfused(storedConfused);
+      const storedArtifacts = readLocal<SummaryArtifact[]>(ARTIFACT_KEY);
+      if (Array.isArray(storedArtifacts)) setArtifacts(storedArtifacts);
+      const storedComments = readLocal<Record<string, LessonComment[]>>(COMMENTS_KEY);
+      if (storedComments && typeof storedComments === "object") setComments(storedComments);
+      const storedBugs = readLocal<BugReport[]>(BUGS_KEY);
+      if (Array.isArray(storedBugs)) setBugs(storedBugs);
       const storedRole = localStorage.getItem("vlearn-role");
       if (storedRole === "coach" || storedRole === "learner") setRole(storedRole);
       const sp = new URLSearchParams(window.location.search);
@@ -369,6 +423,30 @@ function Workspace() {
       /* bỏ qua */
     }
   }, [confused]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ARTIFACT_KEY, JSON.stringify(artifacts));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [artifacts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COMMENTS_KEY, JSON.stringify(comments));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [comments]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BUGS_KEY, JSON.stringify(bugs));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [bugs]);
 
   // Mobile: matchMedia subscription (setState trong callback — đúng pattern).
   useEffect(() => {
@@ -749,6 +827,211 @@ function Workspace() {
     setConfuseKind("");
     setConfuseText("");
     setSaveMsg("Đã gửi phản hồi bối rối (ẩn danh — không kèm email/ID).");
+  }
+
+  // N05 — AI tổng hợp theo yêu cầu (backend /api/ai/summarize).
+  // Người học chọn note/phạm vi + nhập yêu cầu → backend lấy nội dung đã lưu
+  // và nguồn có quyền, gọi AI bằng TEXT trích xuất (không PDF) → bản nháp có
+  // nguồn → sửa/duyệt/bỏ. Artifact lưu riêng, note gốc giữ nguyên.
+  function sumPool(): LearningItem[] {
+    if (sumScope === "lesson")
+      return items.filter(
+        (i) => !i.deletedAt && i.lessonId === activeLesson.lesson.id,
+      );
+    return visibleItems;
+  }
+
+  function openPanel() {
+    setSumErr("");
+    setSumSources([]);
+    setDraftOpen(true);
+  }
+
+  async function requestSummary(isRetry = false) {
+    const pool = sumPool().filter((i) => !sumOff[i.id]);
+    const instruction = sumInstruction.trim() || "Gom ý chính và điểm chưa hiểu còn mở.";
+    if (pool.length === 0) {
+      setSumErr("Chưa chọn ghi chú nào trong phạm vi — tick chọn ít nhất 1 ghi chú.");
+      return;
+    }
+    const payload = {
+      instruction,
+      scope: { lessonId: activeLesson.lesson.id, partId: activePart.id },
+      notes: pool.map((i) => ({
+        id: i.id,
+        title: i.title,
+        body: i.body,
+        quote: i.quote,
+        kind: i.kind,
+        lessonId: i.lessonId,
+        partId: i.partId,
+        pageNumber: i.source.pageNumber,
+        status: i.status,
+        documentId: i.source.documentId,
+      })),
+    };
+    lastPayload.current = payload;
+    if (!isRetry) {
+      setDraftText("");
+      setSumSources([]);
+    }
+    setSumBusy(true);
+    setSumErr("");
+    try {
+      const res = await fetch("/api/ai/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+      setDraftText((data as { draft: string }).draft);
+      setDraftItemIds(pool.map((i) => i.id));
+      setSumSources((data as { sources: SummaryArtifact["sources"] }).sources ?? []);
+      setSumMode((data as { mode?: string }).mode ?? "");
+      setSumRequestId((data as { requestId?: string }).requestId ?? "");
+      const dropped = (data as { dropped?: number }).dropped ?? 0;
+      if (dropped > 0) setSumErr(`Đã loại ${dropped} ghi chú ngoài tài liệu active.`);
+    } catch (e) {
+      setSumErr(e instanceof Error ? e.message : "Gọi AI thất bại — bấm Thử lại.");
+    } finally {
+      setSumBusy(false);
+    }
+  }
+
+  function retrySummary() {
+    if (!lastPayload.current) {
+      requestSummary(false);
+      return;
+    }
+    // Retry thật: gửi lại đúng payload đã lưu.
+    const p = lastPayload.current;
+    setSumBusy(true);
+    setSumErr("");
+    fetch("/api/ai/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+        setDraftText((data as { draft: string }).draft);
+        setSumSources((data as { sources: SummaryArtifact["sources"] }).sources ?? []);
+        setSumMode((data as { mode?: string }).mode ?? "");
+        setSumRequestId((data as { requestId?: string }).requestId ?? "");
+      })
+      .catch((e: unknown) => {
+        setSumErr(e instanceof Error ? e.message : "Gọi AI thất bại — bấm Thử lại.");
+      })
+      .finally(() => setSumBusy(false));
+  }
+
+  function openSummarySource(s: NonNullable<SummaryArtifact["sources"]>[number]) {
+    if (s.kind === "note") {
+      const it = items.find((x) => x.id === s.refId);
+      if (it) {
+        openSource(it);
+        return;
+      }
+      // Note gốc đã xóa/mất: ngã về trang KB cùng bài (nếu có).
+    }
+    if (s.lessonId) {
+      setActiveLessonId(s.lessonId);
+      for (const ch of SEED_COURSE.chapters) {
+        const l = ch.lessons.find((x) => x.id === s.lessonId);
+        if (l) {
+          setActivePartId(l.parts[0].id);
+          break;
+        }
+      }
+      if (s.page) setPage(s.page);
+    }
+  }
+
+  function saveDraft(status: "pending" | "accepted" | "rejected") {
+    const art: SummaryArtifact = {
+      id: newClientOperationId(),
+      status,
+      title: `Tổng hợp ${activeLesson.lesson.title}`,
+      draft: draftText,
+      itemIds: draftItemIds,
+      createdAt: new Date().toISOString(),
+      instruction: sumInstruction.trim() || undefined,
+      mode: sumMode || undefined,
+      requestId: sumRequestId || undefined,
+      sources: sumSources && sumSources.length > 0 ? sumSources : undefined,
+    };
+    if (status === "accepted") {
+      // Duyệt: lưu thành note mới kèm provenance; note gốc không thay đổi.
+      createItem("text", {
+        title: `Đã duyệt: ${art.title}`,
+        body: `${draftText}\n\n(Nguồn: ${draftItemIds.length} ghi chú gốc, giữ nguyên.)`,
+      });
+    }
+    setArtifacts((prev) => [art, ...prev]);
+    setDraftOpen(false);
+    setSaveMsg(
+      status === "accepted" ? "Đã duyệt — lưu bản tổng hợp, ghi chú gốc giữ nguyên." : "Đã lưu bản nháp ở trạng thái bỏ qua.",
+    );
+  }
+
+  function rateMsg(threadId: string, msgId: string, fb: 1 | -1) {
+    setThreads((prev) =>
+      prev.map((x) =>
+        x.id === threadId
+          ? { ...x, messages: x.messages.map((m) => (m.id === msgId ? { ...m, fb } : m)) }
+          : x,
+      ),
+    );
+  }
+
+  function moveItem(id: string, dir: -1 | 1) {
+    const order = visibleItems.map((i) => i.id);
+    const idx = order.indexOf(id);
+    const j = idx + dir;
+    if (idx < 0 || j < 0 || j >= order.length) return;
+    const a = visibleItems[idx];
+    const b = visibleItems[j];
+    scheduleAutosave((prev) =>
+      prev.map((i) => {
+        if (i.id === a.id) return { ...i, sortOrder: b.sortOrder };
+        if (i.id === b.id) return { ...i, sortOrder: a.sortOrder };
+        return i;
+      }),
+    );
+  }
+
+  function addComment() {
+    const text = commentDraft.trim();
+    if (!text) {
+      setSaveMsg("Bình luận trống — nhập rồi gửi.");
+      return;
+    }
+    if (text.length > 500) {
+      setSaveMsg("Bình luận tối đa 500 ký tự.");
+      return;
+    }
+    const c: LessonComment = { id: newClientOperationId(), text, at: new Date().toISOString() };
+    setComments((prev) => ({
+      ...prev,
+      [activeLesson.lesson.id]: [...(prev[activeLesson.lesson.id] ?? []), c],
+    }));
+    setCommentDraft("");
+  }
+
+  function sendBug() {
+    if (!bugTitle.trim() || !bugDesc.trim()) {
+      setSaveMsg("Báo lỗi cần tiêu đề và mô tả.");
+      return;
+    }
+    setBugs((prev) => [
+      { id: newClientOperationId(), title: bugTitle.trim(), desc: bugDesc.trim(), at: new Date().toISOString() },
+      ...prev,
+    ]);
+    setBugTitle("");
+    setBugDesc("");
+    setSaveMsg("Đã ghi nhận báo lỗi kỹ thuật (kho local prototype).");
   }
 
   async function sendAi(retryText?: string) {
@@ -1319,6 +1602,9 @@ function Workspace() {
                   <button onClick={() => fileRef.current?.click()} style={btn(dark)} aria-label="Chèn ảnh">
                     Ảnh
                   </button>
+                  <button onClick={openPanel} style={btn(dark)} title="Chọn ghi chú/phạm vi, nhập yêu cầu, AI tổng hợp từ text đã lưu">
+                    Tổng hợp
+                  </button>
                   <input
                     ref={fileRef}
                     type="file"
@@ -1334,6 +1620,125 @@ function Workspace() {
                     }}
                   />
                 </div>
+                {draftOpen && (
+                  <div
+                    style={{
+                      border: `1px solid #18558B`,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <strong style={{ fontSize: 13 }}>AI tổng hợp ghi chú theo yêu cầu</strong>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <label style={{ fontSize: 12 }}>
+                        Phạm vi:{" "}
+                        <select value={sumScope} onChange={(e) => setSumScope(e.target.value as typeof sumScope)}>
+                          <option value="visible">Kết quả đang xem ({visibleItems.length})</option>
+                          <option value="lesson">Cả bài hiện tại</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div style={{ fontSize: 12, marginTop: 6, maxHeight: 120, overflowY: "auto" }}>
+                      Chọn ghi chú ({sumPool().filter((i) => !sumOff[i.id]).length}/{sumPool().length}):
+                      {sumPool().map((it) => (
+                        <label key={it.id} style={{ display: "block", fontSize: 12, marginTop: 2 }}>
+                          <input
+                            type="checkbox"
+                            checked={!sumOff[it.id]}
+                            onChange={(e) =>
+                              setSumOff((p) => ({ ...p, [it.id]: !e.target.checked }))
+                            }
+                          />{" "}
+                          {it.title ?? it.id} {it.source.pageNumber ? `(tr.${it.source.pageNumber})` : ""}
+                        </label>
+                      ))}
+                      {sumPool().length === 0 && <span>Không có ghi chú nào trong phạm vi.</span>}
+                    </div>
+                    <input
+                      value={sumInstruction}
+                      onChange={(e) => setSumInstruction(e.target.value)}
+                      placeholder="Yêu cầu tổng hợp, VD: gom ý chính và điểm chưa hiểu…"
+                      aria-label="Yêu cầu tổng hợp"
+                      style={{ ...input(dark), width: "100%", marginTop: 6 }}
+                    />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={() => requestSummary(false)} disabled={sumBusy} style={btn(dark)}>
+                        {sumBusy ? "Đang tổng hợp…" : "Gọi AI tổng hợp"}
+                      </button>
+                      {sumErr && (
+                        <button onClick={retrySummary} disabled={sumBusy} style={btn(dark)}>
+                          Thử lại
+                        </button>
+                      )}
+                    </div>
+                    {sumErr && <div style={{ fontSize: 12, color: "#b42318", marginTop: 4 }}>{sumErr}</div>}
+                    {sumRequestId && (
+                      <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+                        {sumRequestId}{sumMode ? ` · ${sumMode}` : ""}
+                      </div>
+                    )}
+                    {sumSources && sumSources.length > 0 && (
+                      <div style={{ fontSize: 12, marginTop: 6 }}>
+                        Nguồn ({sumSources.length}):{" "}
+                        {sumSources.map((s) => (
+                          <button
+                            key={`${s.kind}-${s.refId}`}
+                            onClick={() => openSummarySource(s)}
+                            style={{ ...btn(dark), marginRight: 6, marginTop: 4 }}
+                          >
+                            {s.kind === "note" ? "✎" : "📄"} {s.title}
+                            {s.page ? ` (tr.${s.page})` : ""}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <strong style={{ fontSize: 13, display: "block", marginTop: 6 }}>Bản nháp (sửa được — gốc giữ nguyên)</strong>
+                    <textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      aria-label="Sửa bản tổng hợp"
+                      rows={8}
+                      style={{ ...input(dark), width: "100%", marginTop: 6 }}
+                    />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={() => saveDraft("accepted")} style={btn(dark)}>Duyệt & lưu</button>
+                      <button onClick={() => saveDraft("pending")} style={btn(dark)}>
+                        Để sau
+                      </button>
+                      <button onClick={() => saveDraft("rejected")} style={btn(dark)}>Bỏ</button>
+                    </div>
+                  </div>
+                )}
+                {artifacts.length > 0 && (
+                  <details style={{ fontSize: 12 }}>
+                    <summary style={{ cursor: "pointer" }}>Bản tổng hợp đã lưu ({artifacts.length})</summary>
+                    {artifacts.map((a) => (
+                      <div key={a.id} style={{ marginTop: 4, opacity: a.status === "rejected" ? 0.6 : 1 }}>
+                        <strong>{a.title}</strong> ·{" "}
+                        {a.status === "accepted" ? "Đã duyệt" : a.status === "pending" ? "Nháp" : "Đã bỏ"} ·{" "}
+                        {fmtTime(a.createdAt)}
+                        {a.mode ? ` · ${a.mode}` : ""}
+                        {a.instruction ? <div>Yêu cầu: “{a.instruction}”</div> : null}
+                        <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, margin: "4px 0" }}>{a.draft}</pre>
+                        {a.sources && a.sources.length > 0 && (
+                          <div>
+                            Nguồn ({a.sources.length}):{" "}
+                            {a.sources.map((s) => (
+                              <button
+                                key={`${s.kind}-${s.refId}`}
+                                onClick={() => openSummarySource(s)}
+                                style={{ ...btn(dark), marginRight: 6, marginTop: 4 }}
+                              >
+                                {s.kind === "note" ? "✎" : "📄"} {s.title}
+                                {s.page ? ` (tr.${s.page})` : ""}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </details>
+                )}
                 {visibleItems.length === 0 && (
                   <p style={{ fontSize: 13 }}>Không tìm thấy ghi chú (empty state thật).</p>
                 )}

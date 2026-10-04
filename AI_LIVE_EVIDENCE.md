@@ -14,7 +14,22 @@ stage ok; lỗi hiện đúng stage + cho retry; chống trùng bằng sha256.
 Trang không trích được text (mẫu hiện tại: 2, 5, 9) được liệt kê chờ OCR —
 OCR engine chưa có (BLOCKED), không bỏ qua âm thầm.
 
-## Lần chạy 05/10/2026 (file 3B-Zone2-BLAS-HackathonPresentation.pdf, 11 trang)
+## Lần chạy N05 05/10/2026 (server `npm.cmd run start` port 3112, build production)
+- `POST /api/ai/summarize` (3 notes seed hackathon tr.4/7/10 + instruction, scope
+  blas-solution): 200, `mode:prototype-local`, `kbSource:ingested:sample.pdf`,
+  draft gom nhóm ý chính + điểm chưa hiểu còn mở + bối cảnh KB tr.6–7 (text đã
+  trích xuất — không gửi PDF/binary/base64 ở bất kỳ trường nào), 5 sources có
+  page+lessonId để nút Mở nguồn điều hướng đúng slide/note.
+- Lỗi thật: notes rỗng → 400 INVALID_BODY; documentId ngoài active → 403
+  NO_AUTHORIZED_NOTES; gửi lại cùng payload (retry) → 200.
+- Provider ngoài: route có adapter OpenAI-compatible (chỉ gửi text trích xuất +
+  prompt); chưa có key nên dùng engine nội bộ, ghi nhãn mode rõ ràng.
+  Biến còn thiếu: `AI_PROVIDER_API_KEY` (+ `AI_TEXT_MODEL`, `AI_BASE_URL`).
+- Quét F&B 05/10/2026: KB active (`data/kb-chunks.json`, 8 chunks
+  `doc-3b-hackathon`) sạch F&B; chỉ còn fallback chat gợi ý brand F&B cũ
+  (`assistant.ts`) đã sửa sang chủ đề hackathon. Không reset database/file KB.
+
+## Lần chạy ingestion + chat 05/10/2026 (file 3B-Zone2-BLAS-HackathonPresentation.pdf, 11 trang)
 - Ingest: ready:true, 8 chunks, kbSource `ingested:sample.pdf`.
 - Hỏi scope lesson blas-solution về AI Slice → trả lời từ trang 7 + bổ sung trang 6,
   sources có page+lessonId để nút citation mở đúng slide.

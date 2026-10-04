@@ -22,6 +22,10 @@ evidence. Phân biệt test tự động/mock với test live.
 | T27-thủ-công | Learner gửi Hỗ trợ/Điểm cộng → Coach trả lời đổi trạng thái → learner thấy | implemented, chờ thử browser | kho local prototype, không gửi VLearn thật |
 | F03/F25/F26-thủ-công | Đánh dấu đã xem, Hữu ích/Chưa hữu ích, bối rối ẩn danh, báo cáo tiến độ | implemented, chờ thử browser | quy tắc xem ≠ hiểu hiển thị rõ |
 | T10-thủ-công | Tạo/sửa note từ toolbar và panel dùng cùng ID | PASS (thủ công) | persistence server BLOCKED |
+| N05-01 | `POST /api/ai/summarize` 3 notes hackathon + instruction (live port 3112) | PASS | 200 `mode:prototype-local`, `kbSource:ingested:sample.pdf`, draft 1235 ký tự (ý chính gom nhóm + điểm mở + bối cảnh KB tr.6–7), 5 sources (3 note + 2 kb) có page+lessonId |
+| N05-02 | summarize notes rỗng / documentId ngoài active | PASS | 400 INVALID_BODY; 403 NO_AUTHORIZED_NOTES |
+| N05-03 | Retry cùng payload + chat regression (F&B fallback đã sửa) | PASS | retry 200 đủ sources; chat 200 `ingested:sample.pdf`, answer không còn brand F&B |
+| N05-UI | Panel Tổng hợp: chọn note/phạm vi/instruction → draft có nguồn mở đúng trang → sửa/duyệt/bỏ; artifact riêng + note gốc giữ nguyên; reload còn bản duyệt | implemented, chờ thử browser | artifact + note duyệt persist localStorage; build PASS, route `/api/ai/summarize` có mặt |
 | T12-thủ-công | Tìm “dinh nghia” (không dấu) ra note “Định nghĩa cần nhớ” | PASS (thủ công) | — |
 
 ## T01–T36 (bắt buộc theo brief §9)

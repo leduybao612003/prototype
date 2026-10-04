@@ -86,7 +86,8 @@ export function answerLocal(
       sources: [],
       answer:
         `Mình chưa tìm thấy nội dung phù hợp trong tài liệu mẫu cho câu hỏi này (phạm vi: ${scopeUsed}). ` +
-        `Bạn thử hỏi về PhinDeli, Starbucks, Highlands, KitKat, Coca-Cola, Lay's hoặc Oatside, ` +
+        `Bạn thử hỏi về problem statement, AI Slice, Must/Must not của Agent, ` +
+        `4 bước sử dụng, hoặc metrics validation (grounded conclusion, hallucination), ` +
         `hoặc mở rộng phạm vi sang toàn bộ tài liệu.${contextHint}\n\n[Bản prototype nội bộ — không gọi provider]`,
     };
   }
