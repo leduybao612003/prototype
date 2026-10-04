@@ -41,9 +41,9 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F13 | Xóa annotation trang hiện tại (confirm + undo, trang khác giữ) | Ảnh 07 đã xem | implemented (confirm + soft delete + Hoàn tác) | thủ công browser còn lại |
 | F15 | Sổ note và ảnh (mở/đóng, chèn ảnh, reorder/resize) | Quan sát/Đối chiếu | implemented (mở/đóng, chèn ảnh local, reorder cơ bản) | thủ công |
 | F16 | Ghi chú giảng viên (theo nguồn, không cho sửa, empty đúng) | Quan sát | implemented (seed 2 mục, read-only) | thủ công |
-| F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | planned (blocked: AI vision) | — |
-| F18 | Gợi ý câu hỏi theo slide (chọn → trả lời AI thật) | Quan sát | planned (blocked: AI) | — |
-| F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | implemented một phần (prototype nội bộ: nhiều lượt, retry, chat mới, nguồn mở đúng trang, history local; streaming/stop khi có provider) | API đã verify; provider live deferred theo quyết định 05/10/2026 |
+| F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | implemented một phần (khoanh → crop đúng vùng + preview + câu hỏi → POST /api/ai/vision kèm text trang; chưa vision key → 503 VISION_BLOCKED thật + retry, không fake) | API live 05/10/2026: 503/400 verified; click browser còn lại |
+| F18 | Gợi ý câu hỏi theo slide (chọn → trả lời AI thật) | Quan sát | implemented (gợi ý theo slide → điền vào luồng AI thật prototype-local + KB ingested; provider live deferred) | API chat 200 đã verify |
+| F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | implemented một phần (nhiều lượt, retry, chat mới, nguồn mở đúng trang, history local; stream thật passthrough SSE khi có key + nút Dừng; thiếu key → 503 STREAM_BLOCKED) | stream live BLOCKED (no key); JSON + 503 verified live |
 | F20 | Lịch sử AI (chat mới/mở lại/rename/xóa/feedback/dock/resize) | Quan sát/Đối chiếu | implemented (đa luồng local: mới/mở/đổi tên/xóa; feedback câu trả lời + dock/resize chưa làm) | thủ công browser còn lại |
 | F21 | Video (play/seek/±10s/volume/tốc độ/chất lượng/fullscreen/PiP/focus/phím tắt) | Quan sát/Đối chiếu | planned (blocked: asset video) | empty state thật |
 | F22 | Transcript (timestamp, click seek, active cue) | Quan sát/Đối chiếu | planned (blocked: asset transcript) | empty state thật |
@@ -62,10 +62,10 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 |---|---|---|---|
 | N01 | Bộ ghi chú chung mọi loại item, nhóm chương → bài → nguồn | implemented (local draft + grouping) | thủ công; sync server blocked |
 | N02 | Mở nguồn từ note (đúng tài liệu/trang/vùng hoặc timestamp, giữ panel) | implemented (điều hướng nội bộ + deep link `?part=&page=&item=`) | thủ công |
-| N03 | Tự lưu + sync (một nguồn, idempotency, conflict, cross-tab) | implemented một phần (clientOperationId + revision check ở API stub; autosave debounce + trạng thái Đang lưu/Đã lưu/Lưu thất bại) | persistence server blocked → T13/T14 blocked |
+| N03 | Tự lưu + sync (một nguồn, idempotency, conflict, cross-tab) | implemented một phần (clientOperationId + revision check ở API stub; autosave debounce + trạng thái; cross-tab qua storage event: revision mới thắng, trùng revision khác nội dung giữ bản updatedAt mới + báo xung đột) | persistence server blocked → T13/T14 blocked; cross-tab cần thử 2 tab browser |
 | N04 | Tìm kiếm note (VI có/không dấu, text/quote/metadata, empty/loading/error) | implemented (tìm local, không dấu) | thủ công; OCR ảnh không tuyên bố |
 | N05 | AI tổng hợp chủ động (chọn phạm vi → draft có nguồn → sửa/duyệt/bỏ, gốc giữ nguyên) | implemented (POST /api/ai/summarize trên text trích xuất + UI chọn note/phạm vi/instruction, draft có nguồn mở đúng trang, artifact riêng, reload bền, lỗi + retry thật) | live 05/10/2026: summarize 200, 3 notes → 5 sources (tr.4/6/7/10), kbSource ingested:sample.pdf; lỗi 400/403 + retry verified |
-| N06 | Chuẩn hóa mindmap (vision thật, sửa nodes/edges, duyệt/bỏ, bản riêng) | planned, làm sau parity + sync (blocked: AI vision) | — |
+| N06 | Chuẩn hóa mindmap (vision thật, sửa nodes/edges, duyệt/bỏ, bản riêng) | implemented một phần (POST /api/ai/mindmap: proposal nodes/edges/uncertainties + validate server, UI SVG sửa label/xóa/thêm link, uncertainties bắt buộc xác nhận mới duyệt, artifact riêng, gốc giữ nguyên; ảnh/nét vẽ gắn uncertain vì chưa vision key, đọc thật khi có AI_VISION_MODEL) | live 05/10/2026: 200, 6 nodes/6 edges/3→2 uncertainties, dangling=0; duyệt browser còn lại |
 
 ## Quy tắc parity
 - Deterministic grouping chương → bài → nguồn; AI không tham gia sắp xếp (N01).

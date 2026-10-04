@@ -21,3 +21,12 @@ còn lại dùng README/package docs công khai + `package-lock.json` làm ngu�
 React Bits: chưa chọn component (GĐ F mới đọc repo `DavidHDev/react-bits`, ghi MIT +
 Commons Clause, chỉ copy đúng nguồn, không clone showcase, không WebGL sau PDF).
 MotionSites: chỉ tham khảo nhịp/motion công khai, dùng prompt riêng trong brief §2.
+
+## Bổ sung 05/10/2026 (N06/F17/F19 — không thêm dependency)
+- Mindmap render bằng SVG tay trong `src/app/page.tsx` (`MindmapEditor`, layout
+  lưới tự tính, không layout lib) — quyết định không thêm React Flow để giữ
+  bundle và tránh dep chưa audit.
+- Streaming AI dùng pipe SSE trực tiếp qua `fetch` (server) + đọc `data:` ở
+  client — không thêm `@ai-sdk/openai` hay provider package nào (chưa có key để
+  live-test, tránh code chết phụ thuộc adapter).
+- Engine dùng chung: `src/lib/mindmap.ts` (proposal + validate), `src/lib/summarize.ts`.

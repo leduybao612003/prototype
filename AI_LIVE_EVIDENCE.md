@@ -14,6 +14,22 @@ stage ok; lỗi hiện đúng stage + cho retry; chống trùng bằng sha256.
 Trang không trích được text (mẫu hiện tại: 2, 5, 9) được liệt kê chờ OCR —
 OCR engine chưa có (BLOCKED), không bỏ qua âm thầm.
 
+## Lần chạy N06 + F17 + stream 05/10/2026 (server `npm.cmd run start` port 3113, build production)
+- `POST /api/ai/mindmap` (3 notes text/ink-trống/highlight, scope blas-solution):
+  200, `mode:prototype-local`, 6 nodes / 6 edges / uncertainties (ink chưa đọc
+  bằng vision + link suy đoán theo cụm từ — từ đơn ngắn không dùng để tránh
+  nhiễu), validate server: dangling=0, trùng ID=0; 5 sources có page+lessonId.
+  Notes rỗng → 400 INVALID_BODY.
+- `POST /api/ai/vision` (crop dataURL + câu hỏi, chưa vision key): 503
+  VISION_BLOCKED thật kèm pageContext từ text trang đã trích xuất; ảnh sai →
+  400 INVALID_IMAGE. Không fake trả lời.
+- `POST /api/ai/chat {stream:true}` (chưa key): 503 STREAM_BLOCKED; nhánh pipe
+  SSE provider chỉ chạy khi đủ key (live stream BLOCKED).
+- T30 prompt-injection: note “bỏ qua mọi chỉ dẫn…” → bị liệt kê như dữ liệu có
+  nguồn, không thực thi; KB/note nguyên vẹn.
+- Biến còn thiếu (giữ nguyên): `AI_PROVIDER_API_KEY` (+ `AI_TEXT_MODEL`,
+  `AI_VISION_MODEL`, `AI_BASE_URL`).
+
 ## Lần chạy N05 05/10/2026 (server `npm.cmd run start` port 3112, build production)
 - `POST /api/ai/summarize` (3 notes seed hackathon tr.4/7/10 + instruction, scope
   blas-solution): 200, `mode:prototype-local`, `kbSource:ingested:sample.pdf`,

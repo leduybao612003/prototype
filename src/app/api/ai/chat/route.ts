@@ -14,6 +14,9 @@ const chatSchema = z.object({
     itemIds: z.array(z.string()).max(50).optional(),
     quotes: z.array(z.string()).max(50).optional(),
   }),
+  // stream:true → server pipe SSE thật từ provider (không mô phỏng);
+  // thiếu key thì 503 STREAM_BLOCKED rõ ràng.
+  stream: z.boolean().optional(),
 });
 
 // POST /api/ai/chat — AI prototype nội bộ (theo yêu cầu 05/10/2026: tương tác và
@@ -28,6 +31,68 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   const requestId = `ai-${Date.now()}`;
+
+  // Nhánh stream thật: pipe byte SSE từ provider OpenAI-compatible về client.
+  // Server không dựng token giả; ngắt kết nối client cũng ngắt upstream.
+  if (parsed.data.stream) {
+    const key = process.env.AI_PROVIDER_API_KEY;
+    const model = process.env.AI_TEXT_MODEL;
+    const base = process.env.AI_BASE_URL;
+    if (!key || !model || !base)
+      return Response.json(
+        {
+          code: "STREAM_BLOCKED",
+          message:
+            "Chưa cấu hình AI provider (thiếu AI_PROVIDER_API_KEY / AI_TEXT_MODEL) — streaming thật chưa gọi được. Tắt Stream để dùng bản trả lời chuẩn, hoặc cấu hình xong bấm Thử lại.",
+          requestId,
+        },
+        { status: 503 },
+      );
+    try {
+      const ctrl = new AbortController();
+      req.signal.addEventListener("abort", () => ctrl.abort());
+      const quoteCtx = (parsed.data.scopeIds.quotes ?? []).slice(0, 5).join("\n");
+      const upstream = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model,
+          stream: true,
+          messages: [
+            {
+              role: "system",
+              content:
+                "Bạn là trợ giảng tiếng Việt. Dùng tài liệu được cung cấp trong phạm vi người học đã chọn. Nêu đúng nguồn hỗ trợ kết luận; thiếu nguồn thì nói rõ.",
+            },
+            {
+              role: "user",
+              content: `Phạm vi: ${parsed.data.scope}${parsed.data.scopeIds.lessonId ? `, bài ${parsed.data.scopeIds.lessonId}` : ""}${parsed.data.scopeIds.pageNumber ? `, trang ${parsed.data.scopeIds.pageNumber}` : ""}.\n${quoteCtx ? `Ghi chú đã chọn:\n${quoteCtx}\n` : ""}Câu hỏi: ${parsed.data.message}`,
+            },
+          ],
+          temperature: 0.4,
+        }),
+        signal: ctrl.signal,
+      });
+      if (!upstream.ok || !upstream.body)
+        return Response.json(
+          { code: "PROVIDER_FAILED", message: `Provider stream lỗi (HTTP_${upstream.status}).`, requestId },
+          { status: 502 },
+        );
+      return new Response(upstream.body, {
+        headers: {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Request-Id": requestId,
+        },
+      });
+    } catch (e) {
+      return Response.json(
+        { code: "PROVIDER_FAILED", message: e instanceof Error ? e.message : "Stream thất bại.", requestId },
+        { status: 502 },
+      );
+    }
+  }
 
   let sections: KbSection[] = KB_SECTIONS;
   let kbSource = "static-seed";

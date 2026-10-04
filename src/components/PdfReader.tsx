@@ -36,6 +36,8 @@ interface PdfReaderProps {
   onErase: (id: string) => void;
   onClearPage: () => void;
   dark: boolean;
+  // F17: khoanh vùng xong → gửi crop vùng + geometry cho panel AI (preview + hỏi).
+  onAskRegion?: (info: { rect: { x: number; y: number; w: number; h: number }; crop: string }) => void;
 }
 
 interface Stroke {
@@ -60,6 +62,7 @@ export default function PdfReader({
   onErase,
   onClearPage,
   dark,
+  onAskRegion,
 }: PdfReaderProps) {
   const [numPages, setNumPages] = useState(0);
   const [loadError, setLoadError] = useState("");
@@ -234,6 +237,31 @@ export default function PdfReader({
     };
   }
 
+  // F17: cắt đúng vùng rect từ canvas trang (tọa độ chuẩn hóa 0..1),
+  // thu nhỏ còn tối đa 640px, JPEG ~0.7 — KHÔNG gửi toàn trang cho model.
+  function cropRect(r: Quad): string | null {
+    try {
+      const canvas = canvasRef.current;
+      if (!canvas || canvas.width < 8 || canvas.height < 8) return null;
+      const sx = Math.floor(r.x * canvas.width);
+      const sy = Math.floor(r.y * canvas.height);
+      const sw = Math.max(1, Math.floor(r.w * canvas.width));
+      const sh = Math.max(1, Math.floor(r.h * canvas.height));
+      if (sx + sw <= 0 || sy + sh <= 0 || sx >= canvas.width || sy >= canvas.height) return null;
+      const scale = Math.min(1, 640 / Math.max(sw, sh));
+      const out = document.createElement("canvas");
+      out.width = Math.max(1, Math.floor(sw * scale));
+      out.height = Math.max(1, Math.floor(sh * scale));
+      const ctx = out.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, out.width, out.height);
+      const url = out.toDataURL("image/jpeg", 0.7);
+      return url.length > 2_000_000 ? null : url;
+    } catch {
+      return null;
+    }
+  }
+
   // Viết tay: vẽ trên SVG overlay, commit khi nhấc bút (F08).
   function onPointerDown(e: React.PointerEvent) {
     if (tool === "write") {
@@ -267,6 +295,11 @@ export default function PdfReader({
           geometry: { rect: r },
           body: "Mô tả điều chưa hiểu ở vùng đã khoanh…",
         });
+        // F17: crop đúng vùng đã khoanh (không gửi toàn trang) cho panel AI.
+        if (onAskRegion) {
+          const crop = cropRect(r);
+          if (crop) onAskRegion({ rect: r, crop });
+        }
       }
     }
     setDrawing(null);

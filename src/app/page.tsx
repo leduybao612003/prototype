@@ -53,6 +53,24 @@ interface SummaryArtifact {
   sources?: { kind: string; refId: string; title: string; page: number | null; lessonId: string }[];
 }
 
+interface MindmapProposal {
+  nodes: { id: string; label: string; sourceItemId: string; uncertain: boolean }[];
+  edges: { id: string; source: string; target: string; label?: string; uncertain: boolean }[];
+  uncertainties: { nodeId?: string; edgeId?: string; reason: string }[];
+}
+
+interface MindmapArtifact {
+  id: string;
+  status: "pending" | "accepted" | "rejected";
+  title: string;
+  proposal: MindmapProposal;
+  itemIds: string[];
+  createdAt: string;
+  mode?: string;
+  requestId?: string;
+  sources?: { kind: string; refId: string; title: string; page: number | null; lessonId: string }[];
+}
+
 interface LessonComment {
   id: string;
   text: string;
@@ -128,6 +146,7 @@ const PROGRESS_KEY = "vlearn-progress-v1";
 const FEEDBACK_KEY = "vlearn-feedback-v1";
 const CONFUSE_KEY = "vlearn-confuse-v1";
 const ARTIFACT_KEY = "vlearn-artifacts-v1";
+const MINDMAPS_KEY = "vlearn-mindmaps-v1";
 const COMMENTS_KEY = "vlearn-comments-v1";
 const BUGS_KEY = "vlearn-bugs-v1";
 
@@ -238,6 +257,37 @@ function Workspace() {
   const [sumMode, setSumMode] = useState("");
   const [sumRequestId, setSumRequestId] = useState("");
   const lastPayload = useRef<{ instruction: string; scope: { lessonId: string; partId: string }; notes: object[] } | null>(null);
+  // F17 — hỏi AI theo vùng khoanh (crop + ngữ cảnh + câu hỏi).
+  const [vision, setVision] = useState<{
+    crop: string;
+    rect: { x: number; y: number; w: number; h: number };
+    page: number;
+    lessonId: string;
+    partId: string;
+  } | null>(null);
+  const [visQ, setVisQ] = useState("");
+  const [visBusy, setVisBusy] = useState(false);
+  const [visErr, setVisErr] = useState("");
+  const visPayload = useRef<object | null>(null);
+  // N06 — mindmap: proposal sửa được + uncertainties phải xác nhận mới duyệt.
+  const [mindmaps, setMindmaps] = useState<MindmapArtifact[]>([]);
+  const [mmOpen, setMmOpen] = useState(false);
+  const [mmBusy, setMmBusy] = useState(false);
+  const [mmErr, setMmErr] = useState("");
+  const [mmProposal, setMmProposal] = useState<MindmapProposal | null>(null);
+  const [mmSources, setMmSources] = useState<SummaryArtifact["sources"]>([]);
+  const [mmMode, setMmMode] = useState("");
+  const [mmRequestId, setMmRequestId] = useState("");
+  const [mmItemIds, setMmItemIds] = useState<string[]>([]);
+  const [mmSel, setMmSel] = useState<string | null>(null);
+  const [mmConfirmed, setMmConfirmed] = useState<Record<number, boolean>>({});
+  const [mmEdgeA, setMmEdgeA] = useState("");
+  const [mmEdgeB, setMmEdgeB] = useState("");
+  const [mmEdgeLabel, setMmEdgeLabel] = useState("");
+  // F19 — stream thật từ provider (thiếu key → 503 rõ ràng).
+  const [streamOn, setStreamOn] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const streamAbort = useRef<AbortController | null>(null);
   const [comments, setComments] = useState<Record<string, LessonComment[]>>({});
   const [commentDraft, setCommentDraft] = useState("");
   const [bugs, setBugs] = useState<BugReport[]>([]);
@@ -251,6 +301,7 @@ function Workspace() {
   const [panelW, setPanelW] = useState(360);
   const [labDone, setLabDone] = useState<Record<string, boolean>>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const itemsRef = useRef<LearningItem[]>(SEED_ITEMS);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const kbFileRef = useRef<HTMLInputElement | null>(null);
 
@@ -349,6 +400,8 @@ function Workspace() {
       if (storedConfused && typeof storedConfused === "object") setConfused(storedConfused);
       const storedArtifacts = readLocal<SummaryArtifact[]>(ARTIFACT_KEY);
       if (Array.isArray(storedArtifacts)) setArtifacts(storedArtifacts);
+      const storedMindmaps = readLocal<MindmapArtifact[]>(MINDMAPS_KEY);
+      if (Array.isArray(storedMindmaps)) setMindmaps(storedMindmaps);
       const storedComments = readLocal<Record<string, LessonComment[]>>(COMMENTS_KEY);
       if (storedComments && typeof storedComments === "object") setComments(storedComments);
       const storedBugs = readLocal<BugReport[]>(BUGS_KEY);
@@ -377,6 +430,7 @@ function Workspace() {
   }, [theme, lang, role]);
 
   useEffect(() => {
+    itemsRef.current = items;
     try {
       localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
     } catch {
@@ -434,6 +488,14 @@ function Workspace() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(MINDMAPS_KEY, JSON.stringify(mindmaps));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [mindmaps]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(COMMENTS_KEY, JSON.stringify(comments));
     } catch {
       /* bỏ qua */
@@ -447,6 +509,53 @@ function Workspace() {
       /* bỏ qua */
     }
   }, [bugs]);
+
+  // N03 — đồng bộ cross-tab: tab khác ghi kho note → merge theo revision
+  // (mới hơn thắng); trùng revision khác nội dung → giữ bản updatedAt mới hơn
+  // và báo xung đột rõ, không âm thầm ghi đè.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== ITEMS_KEY || !e.newValue) return;
+      try {
+        const incoming = JSON.parse(e.newValue) as LearningItem[];
+        if (!Array.isArray(incoming)) return;
+        const map = new Map(itemsRef.current.map((i) => [i.id, i]));
+        let changed = false;
+        let conflict = false;
+        for (const inc of incoming) {
+          if (!inc || typeof inc.id !== "string") continue;
+          const cur = map.get(inc.id);
+          if (!cur) {
+            map.set(inc.id, inc);
+            changed = true;
+            continue;
+          }
+          if (inc.revision > cur.revision) {
+            map.set(inc.id, inc);
+            changed = true;
+          } else if (
+            inc.revision === cur.revision &&
+            inc.updatedAt !== cur.updatedAt &&
+            (inc.body ?? "") !== (cur.body ?? "")
+          ) {
+            conflict = true;
+            if (inc.updatedAt > cur.updatedAt) {
+              map.set(inc.id, inc);
+              changed = true;
+            }
+          }
+        }
+        if (changed) setItems([...map.values()]);
+        if (conflict)
+          setSaveMsg("Tab khác cũng sửa cùng ghi chú — đã giữ bản mới nhất theo thời gian, kiểm tra lại nội dung.");
+        else if (changed) setSaveMsg("Đã đồng bộ thay đổi ghi chú từ tab khác.");
+      } catch {
+        /* payload tab khác hỏng — giữ nguyên */
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // Mobile: matchMedia subscription (setState trong callback — đúng pattern).
   useEffect(() => {
@@ -927,6 +1036,307 @@ function Workspace() {
       .finally(() => setSumBusy(false));
   }
 
+  // F17 — hỏi AI về vùng đã khoanh: crop đúng vùng + ngữ cảnh trang + câu hỏi.
+  // Crop chỉ giữ trong phiên (không persist localStorage để tránh phình kho).
+  function askVision(info: { rect: { x: number; y: number; w: number; h: number }; crop: string }) {
+    setVision({
+      ...info,
+      page,
+      lessonId: activeLesson.lesson.id,
+      partId: activePart.id,
+    });
+    setVisQ("");
+    setVisErr("");
+    setTab("ai");
+  }
+
+  async function sendVision(isRetry = false) {
+    if (!vision || visBusy) return;
+    const question = (isRetry ? (visPayload.current as { question?: string } | null)?.question : visQ)?.trim() || visQ.trim();
+    if (!question && !isRetry) {
+      setVisErr("Nhập câu hỏi về vùng đã khoanh rồi gửi.");
+      return;
+    }
+    const q = question || visQ.trim();
+    if (!q) {
+      setVisErr("Nhập câu hỏi về vùng đã khoanh rồi gửi.");
+      return;
+    }
+    const payload = {
+      question: q,
+      lessonId: vision.lessonId,
+      partId: vision.partId,
+      pageNumber: vision.page,
+      geometry: vision.rect,
+      imageDataUrl: vision.crop,
+      contextNotes: items
+        .filter((i) => !i.deletedAt && i.partId === vision.partId && (i.source.pageNumber ?? 0) === vision.page)
+        .slice(0, 5)
+        .map((i) => `${i.title ?? ""}: ${(i.quote ?? i.body ?? "").slice(0, 200)}`),
+    };
+    visPayload.current = payload;
+    setVisBusy(true);
+    setVisErr("");
+    try {
+      const res = await fetch("/api/ai/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+      // Lưu Q&A vào luồng chat hiện tại để mở lại sau reload (ảnh crop không persist).
+      let tid = activeThreadId;
+      if (!tid || !threads.some((x) => x.id === tid)) {
+        const th: ChatThread = {
+          id: newClientOperationId(),
+          title: q.slice(0, 40),
+          customTitle: false,
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        };
+        setThreads((prev) => [th, ...prev]);
+        setActiveThreadId(th.id);
+        tid = th.id;
+      }
+      pushMsg(tid, { id: newClientOperationId(), role: "user", text: `[Vùng trang ${vision.page}] ${q}` }, q);
+      pushMsg(tid, {
+        id: newClientOperationId(),
+        role: "assistant",
+        text: (data as { answer: string }).answer,
+        sources: (data as { sources: ChatSource[] }).sources,
+        requestId: (data as { requestId: string }).requestId,
+      });
+      setVisQ("");
+    } catch (e) {
+      setVisErr(e instanceof Error ? e.message : "Hỏi vision thất bại — bấm Thử lại.");
+    } finally {
+      setVisBusy(false);
+    }
+  }
+
+  // N06 — xin proposal mindmap từ backend (note đã lưu + phạm vi có quyền).
+  async function requestMindmap() {
+    const pool = sumPool().filter((i) => !sumOff[i.id]);
+    if (pool.length === 0) {
+      setMmErr("Chưa chọn ghi chú nào trong phạm vi — tick chọn ít nhất 1 ghi chú.");
+      return;
+    }
+    setMmBusy(true);
+    setMmErr("");
+    try {
+      const res = await fetch("/api/ai/mindmap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: { lessonId: activeLesson.lesson.id, partId: activePart.id, title: activeLesson.lesson.title },
+          notes: pool.map((i) => ({
+            id: i.id,
+            title: i.title,
+            body: i.body,
+            quote: i.quote,
+            kind: i.kind,
+            lessonId: i.lessonId,
+            partId: i.partId,
+            pageNumber: i.source.pageNumber,
+            documentId: i.source.documentId,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+      setMmProposal((data as { proposal: MindmapProposal }).proposal);
+      setMmSources((data as { sources: MindmapArtifact["sources"] }).sources ?? []);
+      setMmMode((data as { mode?: string }).mode ?? "");
+      setMmRequestId((data as { requestId?: string }).requestId ?? "");
+      setMmItemIds(pool.map((i) => i.id));
+      setMmConfirmed({});
+      setMmSel(null);
+    } catch (e) {
+      setMmErr(e instanceof Error ? e.message : "Tạo sơ đồ thất bại — bấm Tạo lại.");
+    } finally {
+      setMmBusy(false);
+    }
+  }
+
+  function mmNode(id: string) {
+    return mmProposal?.nodes.find((n) => n.id === id) ?? null;
+  }
+
+  function setMmLabel(id: string, label: string) {
+    setMmProposal((p) => (p ? { ...p, nodes: p.nodes.map((n) => (n.id === id ? { ...n, label } : n)) } : p));
+  }
+
+  function deleteMmNode(id: string) {
+    if (id === "root") return;
+    setMmProposal((p) =>
+      p
+        ? {
+            nodes: p.nodes.filter((n) => n.id !== id),
+            edges: p.edges.filter((e) => e.source !== id && e.target !== id),
+            uncertainties: p.uncertainties.filter((u) => u.nodeId !== id),
+          }
+        : p,
+    );
+    if (mmSel === id) setMmSel(null);
+  }
+
+  function deleteMmEdge(id: string) {
+    setMmProposal((p) =>
+      p
+        ? {
+            ...p,
+            edges: p.edges.filter((e) => e.id !== id),
+            uncertainties: p.uncertainties.filter((u) => u.edgeId !== id),
+          }
+        : p,
+    );
+  }
+
+  function addMmEdge() {
+    if (!mmEdgeA || !mmEdgeB || mmEdgeA === mmEdgeB || !mmProposal) return;
+    if (!mmNode(mmEdgeA) || !mmNode(mmEdgeB)) return;
+    const id = `e-user-${Date.now()}`;
+    setMmProposal((p) =>
+      p ? { ...p, edges: [...p.edges, { id, source: mmEdgeA, target: mmEdgeB, label: mmEdgeLabel.trim() || undefined, uncertain: false }] } : p,
+    );
+    setMmEdgeA("");
+    setMmEdgeB("");
+    setMmEdgeLabel("");
+  }
+
+  function openMmSource(refId: string) {
+    const s = (mmSources ?? []).find((x) => x.refId === refId);
+    if (s) {
+      openSummarySource(s as { kind: string; refId: string; title: string; page: number | null; lessonId: string });
+      return;
+    }
+    const it = items.find((x) => x.id === refId);
+    if (it) openSource(it);
+  }
+
+  function saveMindmap(status: "pending" | "accepted" | "rejected") {
+    if (!mmProposal) return;
+    setMindmaps((prev) => [
+      {
+        id: newClientOperationId(),
+        status,
+        title: `Sơ đồ ${activeLesson.lesson.title}`,
+        proposal: mmProposal,
+        itemIds: mmItemIds,
+        createdAt: new Date().toISOString(),
+        mode: mmMode || undefined,
+        requestId: mmRequestId || undefined,
+        sources: mmSources && mmSources.length > 0 ? mmSources : undefined,
+      },
+      ...prev,
+    ]);
+    setMmOpen(false);
+    setMmProposal(null);
+    setSaveMsg(
+      status === "accepted"
+        ? "Đã duyệt sơ đồ — lưu phiên bản riêng, bản gốc (ghi chú/ảnh/nét vẽ) giữ nguyên."
+        : "Đã lưu sơ đồ ở trạng thái bỏ qua.",
+    );
+  }
+
+  // F19 — stream thật từ provider qua POST /api/ai/chat {stream:true}.
+  // Parse SSE OpenAI-style; Stop hủy cả upstream (AbortController).
+  async function sendAiStream(text: string) {
+    const t = text.trim();
+    if (!t || aiBusy || streaming) return;
+    let tid = activeThreadId;
+    if (!tid || !threads.some((x) => x.id === tid)) {
+      const th: ChatThread = {
+        id: newClientOperationId(),
+        title: t.slice(0, 40),
+        customTitle: false,
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      };
+      setThreads((prev) => [th, ...prev]);
+      setActiveThreadId(th.id);
+      tid = th.id;
+    }
+    const userMsg: ChatMsg = { id: newClientOperationId(), role: "user", text: t };
+    pushMsg(tid, userMsg, t);
+    setAiInput("");
+    const ctrl = new AbortController();
+    streamAbort.current = ctrl;
+    setStreaming(true);
+    const asstId = newClientOperationId();
+    pushMsg(tid, { id: asstId, role: "assistant", text: "" });
+    const append = (delta: string) =>
+      setThreads((prev) =>
+        prev.map((x) =>
+          x.id === tid
+            ? { ...x, messages: x.messages.map((m) => (m.id === asstId ? { ...m, text: m.text + delta } : m)) }
+            : x,
+        ),
+      );
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-local-1",
+          message: t,
+          scope: aiScope === "page" ? "page" : aiScope === "lesson" ? "lesson" : "selection",
+          scopeIds: {
+            lessonId: activeLesson.lesson.id,
+            partId: activePart.id,
+            pageNumber: activePart.kind === "pdf" ? page : undefined,
+            itemIds: aiScope === "selection" ? visibleItems.slice(0, 5).map((i) => i.id) : [],
+            quotes:
+              aiScope === "selection"
+                ? visibleItems.slice(0, 5).map((i) => i.quote ?? i.body ?? "").filter(Boolean)
+                : [],
+          },
+          stream: true,
+        }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => null);
+        throw new Error((err as { message?: string } | null)?.message ?? `HTTP_${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+        for (const part of parts) {
+          for (const line of part.split("\n")) {
+            const s = line.trim();
+            if (!s.startsWith("data:")) continue;
+            const payload = s.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const j = JSON.parse(payload) as { choices?: { delta?: { content?: string } }[] };
+              const d = j.choices?.[0]?.delta?.content ?? "";
+              if (d) append(d);
+            } catch {
+              /* chunk giữ lại ở buf — bỏ qua dòng lỗi */
+            }
+          }
+        }
+      }
+    } catch (e) {
+      append(
+        e instanceof Error && e.name === "AbortError"
+          ? "\n[Đã dừng stream theo yêu cầu.]"
+          : `\n[Stream lỗi: ${e instanceof Error ? e.message : "không rõ"} — câu hỏi vẫn giữ, bấm Gửi lại.]`,
+      );
+    } finally {
+      streamAbort.current = null;
+      setStreaming(false);
+    }
+  }
+
   function openSummarySource(s: NonNullable<SummaryArtifact["sources"]>[number]) {
     if (s.kind === "note") {
       const it = items.find((x) => x.id === s.refId);
@@ -1315,6 +1725,7 @@ function Workspace() {
               onErase={softDelete}
               onClearPage={clearPage}
               dark={dark}
+              onAskRegion={askVision}
             />
           )}
 
@@ -1605,6 +2016,16 @@ function Workspace() {
                   <button onClick={openPanel} style={btn(dark)} title="Chọn ghi chú/phạm vi, nhập yêu cầu, AI tổng hợp từ text đã lưu">
                     Tổng hợp
                   </button>
+                  <button
+                    onClick={() => {
+                      setMmErr("");
+                      setMmOpen(true);
+                    }}
+                    style={btn(dark)}
+                    title="Chọn ghi chú rồi chuẩn hóa thành sơ đồ nodes/edges, sửa và duyệt riêng"
+                  >
+                    Sơ đồ
+                  </button>
                   <input
                     ref={fileRef}
                     type="file"
@@ -1739,6 +2160,96 @@ function Workspace() {
                     ))}
                   </details>
                 )}
+                {mmOpen && (
+                  <div style={{ border: `1px solid #18558B`, borderRadius: 8, padding: 8 }}>
+                    <strong style={{ fontSize: 13 }}>Chuẩn hóa sơ đồ (mindmap)</strong>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Dùng đúng ghi chú đã tick chọn ở panel Tổng hợp ({sumPool().filter((i) => !sumOff[i.id]).length} mục).
+                      Liên kết suy đoán luôn cần xác nhận trước khi duyệt.
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={requestMindmap} disabled={mmBusy} style={btn(dark)}>
+                        {mmBusy ? "Đang tạo…" : mmProposal ? "Tạo lại" : "Tạo sơ đồ"}
+                      </button>
+                      <button onClick={() => { setMmOpen(false); }} style={btn(dark)}>Đóng</button>
+                    </div>
+                    {mmErr && <div style={{ fontSize: 12, color: "#b42318", marginTop: 4 }}>{mmErr}</div>}
+                    {mmRequestId && (
+                      <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+                        {mmRequestId}{mmMode ? ` · ${mmMode}` : ""}
+                      </div>
+                    )}
+                    {mmProposal && (
+                      <MindmapEditor
+                        proposal={mmProposal}
+                        sel={mmSel}
+                        onSelect={setMmSel}
+                        onLabel={setMmLabel}
+                        onDeleteNode={deleteMmNode}
+                        onDeleteEdge={deleteMmEdge}
+                        onAddEdge={addMmEdge}
+                        edgeA={mmEdgeA}
+                        edgeB={mmEdgeB}
+                        edgeLabel={mmEdgeLabel}
+                        setEdgeA={setMmEdgeA}
+                        setEdgeB={setMmEdgeB}
+                        setEdgeLabel={setMmEdgeLabel}
+                        confirmed={mmConfirmed}
+                        onConfirm={(i) => setMmConfirmed((p) => ({ ...p, [i]: !p[i] }))}
+                        onOpenSource={openMmSource}
+                        dark={dark}
+                      />
+                    )}
+                    {mmProposal && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <button
+                          onClick={() => saveMindmap("accepted")}
+                          disabled={mmProposal.uncertainties.filter((_, i) => !mmConfirmed[i]).length > 0}
+                          style={btn(dark)}
+                          title="Chỉ active sau khi xác nhận mọi điểm chưa rõ"
+                        >
+                          Duyệt & lưu ({mmProposal.uncertainties.filter((_, i) => !mmConfirmed[i]).length} điểm cần xác nhận)
+                        </button>
+                        <button onClick={() => saveMindmap("pending")} style={btn(dark)}>Để sau</button>
+                        <button onClick={() => saveMindmap("rejected")} style={btn(dark)}>Bỏ</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {mindmaps.length > 0 && (
+                  <details style={{ fontSize: 12 }}>
+                    <summary style={{ cursor: "pointer" }}>Sơ đồ đã lưu ({mindmaps.length})</summary>
+                    {mindmaps.map((m) => (
+                      <div key={m.id} style={{ marginTop: 4, opacity: m.status === "rejected" ? 0.6 : 1 }}>
+                        <strong>{m.title}</strong> ·{" "}
+                        {m.status === "accepted" ? "Đã duyệt" : m.status === "pending" ? "Nháp" : "Đã bỏ"} ·{" "}
+                        {fmtTime(m.createdAt)}
+                        {m.mode ? ` · ${m.mode}` : ""}
+                        <div style={{ opacity: 0.8 }}>
+                          {m.proposal.nodes.length} nodes · {m.proposal.edges.length} links ·{" "}
+                          {m.itemIds.length} ghi chú gốc (giữ nguyên)
+                        </div>
+                        {m.sources && m.sources.length > 0 && (
+                          <div>
+                            Nguồn:{" "}
+                            {m.sources.slice(0, 6).map((s) => (
+                              <button
+                                key={`${s.kind}-${s.refId}`}
+                                onClick={() =>
+                                  openSummarySource(s as { kind: string; refId: string; title: string; page: number | null; lessonId: string })
+                                }
+                                style={{ ...btn(dark), marginRight: 6, marginTop: 4 }}
+                              >
+                                {s.kind === "note" ? "✎" : "📄"} {s.title}
+                                {s.page ? ` (tr.${s.page})` : ""}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </details>
+                )}
                 {visibleItems.length === 0 && (
                   <p style={{ fontSize: 13 }}>Không tìm thấy ghi chú (empty state thật).</p>
                 )}
@@ -1841,6 +2352,54 @@ function Workspace() {
                 <p style={{ fontSize: 12, opacity: 0.75 }}>
                   Trợ giảng prototype nội bộ — trả lời từ nội dung file mẫu, không gọi provider.
                 </p>
+                {vision && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      border: `1px solid #18558B`,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <strong>Hỏi AI về vùng đã khoanh (trang {vision.page})</strong>
+                    <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "flex-start" }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={vision.crop}
+                        alt={`Crop vùng trang ${vision.page}`}
+                        style={{ maxWidth: 220, borderRadius: 6, border: "1px solid #DCE5ED" }}
+                      />
+                      <div style={{ flex: 1, minWidth: 160 }}>
+                        <div style={{ opacity: 0.8 }}>
+                          Vùng: x {Math.round(vision.rect.x * 100)}%, y {Math.round(vision.rect.y * 100)}%,{" "}
+                          {Math.round(vision.rect.w * 100)}×{Math.round(vision.rect.h * 100)}% — crop đúng vùng
+                          (không gửi toàn trang). Ảnh chỉ giữ trong phiên.
+                        </div>
+                        <input
+                          value={visQ}
+                          onChange={(e) => setVisQ(e.target.value)}
+                          placeholder="Hỏi gì về vùng này?…"
+                          aria-label="Câu hỏi về vùng đã khoanh"
+                          style={{ ...input(dark), width: "100%", marginTop: 6 }}
+                        />
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button onClick={() => sendVision(false)} disabled={visBusy} style={btn(dark)}>
+                            {visBusy ? "Đang hỏi…" : "Gửi vùng + câu hỏi"}
+                          </button>
+                          {visErr && (
+                            <button onClick={() => sendVision(true)} disabled={visBusy} style={btn(dark)}>
+                              Thử lại
+                            </button>
+                          )}
+                          <button onClick={() => setVision(null)} style={btn(dark)}>
+                            Bỏ vùng
+                          </button>
+                        </div>
+                        {visErr && <div style={{ color: "#b42318", marginTop: 4 }}>{visErr}</div>}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {/* Trạng thái pipeline KB */}
                 <div
                   style={{
@@ -1979,10 +2538,30 @@ function Workspace() {
                   rows={3}
                   style={input(dark)}
                 />
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => sendAi()} disabled={aiBusy} style={btn(dark)}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => (streamOn ? sendAiStream(aiInput) : sendAi())}
+                    disabled={aiBusy || streaming}
+                    style={btn(dark)}
+                  >
                     {t.send}
                   </button>
+                  {streaming && (
+                    <button
+                      onClick={() => streamAbort.current?.abort()}
+                      style={btn(dark)}
+                    >
+                      Dừng
+                    </button>
+                  )}
+                  <label style={{ fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={streamOn}
+                      onChange={(e) => setStreamOn(e.target.checked)}
+                    />{" "}
+                    Stream thật (cần provider key)
+                  </label>
                   <button
                     onClick={() => {
                       const lastUser = [...chat].reverse().find((m) => m.role === "user");
@@ -2130,6 +2709,168 @@ function Workspace() {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function MindmapEditor(props: {
+  proposal: MindmapProposal;
+  sel: string | null;
+  onSelect: (id: string | null) => void;
+  onLabel: (id: string, label: string) => void;
+  onDeleteNode: (id: string) => void;
+  onDeleteEdge: (id: string) => void;
+  onAddEdge: () => void;
+  edgeA: string;
+  edgeB: string;
+  edgeLabel: string;
+  setEdgeA: (v: string) => void;
+  setEdgeB: (v: string) => void;
+  setEdgeLabel: (v: string) => void;
+  confirmed: Record<number, boolean>;
+  onConfirm: (i: number) => void;
+  onOpenSource: (refId: string) => void;
+  dark: boolean;
+}) {
+  const { proposal, sel, dark } = props;
+  const NW = 150;
+  const NH = 46;
+  const GX = 24;
+  const GY = 64;
+  const rest = proposal.nodes.filter((n) => n.id !== "root");
+  const root = proposal.nodes.find((n) => n.id === "root");
+  const cols = rest.length > 6 ? 3 : 2;
+  const rows = Math.max(1, Math.ceil(rest.length / cols));
+  const W = cols * (NW + GX) + GX;
+  const gridTop = root ? 120 : 16;
+  const H = gridTop + rows * (NH + GY);
+  const pos = new Map<string, { cx: number; cy: number }>();
+  if (root) pos.set("root", { cx: W / 2, cy: 33 });
+  rest.forEach((n, i) => {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    pos.set(n.id, { cx: GX + c * (NW + GX) + NW / 2, cy: gridTop + r * (NH + GY) + NH / 2 });
+  });
+  const selNode = proposal.nodes.find((n) => n.id === sel) ?? null;
+  const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ maxHeight: 320, overflow: "auto", border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`, borderRadius: 8 }}>
+        <svg width={W} height={H} role="img" aria-label="Xem trước sơ đồ">
+          {proposal.edges.map((e) => {
+            const a = pos.get(e.source);
+            const b = pos.get(e.target);
+            if (!a || !b) return null;
+            return (
+              <line
+                key={e.id}
+                x1={a.cx}
+                y1={a.cy}
+                x2={b.cx}
+                y2={b.cy}
+                stroke={e.uncertain ? "#b45309" : "#18558B"}
+                strokeDasharray={e.uncertain ? "5 4" : undefined}
+                strokeWidth={1.5}
+              />
+            );
+          })}
+          {proposal.nodes.map((n) => {
+            const p = pos.get(n.id);
+            if (!p) return null;
+            const isSel = sel === n.id;
+            return (
+              <g key={n.id} onClick={() => props.onSelect(isSel ? null : n.id)} style={{ cursor: "pointer" }}>
+                <rect
+                  x={p.cx - NW / 2}
+                  y={p.cy - NH / 2}
+                  width={NW}
+                  height={NH}
+                  rx={8}
+                  fill={n.uncertain ? (dark ? "#3a2c10" : "#FEF3C7") : dark ? "#1d2a36" : "#FFFFFF"}
+                  stroke={isSel ? "#dc2626" : "#18558B"}
+                  strokeWidth={isSel ? 2.5 : 1.5}
+                />
+                <text x={p.cx} y={p.cy - 2} textAnchor="middle" fontSize={11} fill={dark ? "#e6edf3" : "#203246"}>
+                  {short(n.label, 20)}
+                </text>
+                {n.uncertain && (
+                  <text x={p.cx} y={p.cy + 14} textAnchor="middle" fontSize={10} fill="#b45309">
+                    ⚠ cần xác nhận
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+        Gốc/đề xuất đối chiếu: bản gốc (ghi chú, ảnh, nét vẽ) không thay đổi — mọi sửa chỉ nằm trên bản đề xuất này.
+      </div>
+      {selNode && (
+        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={selNode.label}
+            onChange={(e) => props.onLabel(selNode.id, e.target.value)}
+            aria-label="Sửa tên node"
+            style={{ ...input(dark), flex: 1, minWidth: 140 }}
+          />
+          <button onClick={() => props.onOpenSource(selNode.sourceItemId)} style={btn(dark)}>
+            Mở nguồn
+          </button>
+          {selNode.id !== "root" && (
+            <button onClick={() => props.onDeleteNode(selNode.id)} style={btn(dark)}>
+              Xóa node
+            </button>
+          )}
+        </div>
+      )}
+      <div style={{ fontSize: 12, marginTop: 6 }}>
+        <strong>Liên kết ({proposal.edges.length}):</strong>
+        {proposal.edges.map((e) => (
+          <div key={e.id} style={{ marginTop: 2 }}>
+            {short(props.proposal.nodes.find((n) => n.id === e.source)?.label ?? e.source, 18)} →{" "}
+            {short(props.proposal.nodes.find((n) => n.id === e.target)?.label ?? e.target, 18)}
+            {e.label ? ` (${e.label})` : ""}
+            {e.uncertain ? " · suy đoán" : ""}{" "}
+            <button onClick={() => props.onDeleteEdge(e.id)} style={btn(dark)} aria-label={`Xóa liên kết ${e.id}`}>
+              ×
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={props.edgeA} onChange={(e) => props.setEdgeA(e.target.value)} aria-label="Node nguồn">
+            <option value="">— từ —</option>
+            {proposal.nodes.map((n) => (
+              <option key={n.id} value={n.id}>{short(n.label, 24)}</option>
+            ))}
+          </select>
+          <select value={props.edgeB} onChange={(e) => props.setEdgeB(e.target.value)} aria-label="Node đích">
+            <option value="">— tới —</option>
+            {proposal.nodes.map((n) => (
+              <option key={n.id} value={n.id}>{short(n.label, 24)}</option>
+            ))}
+          </select>
+          <input
+            value={props.edgeLabel}
+            onChange={(e) => props.setEdgeLabel(e.target.value)}
+            placeholder="Nhãn (tùy chọn)"
+            aria-label="Nhãn liên kết"
+            style={{ ...input(dark), width: 130 }}
+          />
+          <button onClick={props.onAddEdge} style={btn(dark)}>Thêm link</button>
+        </div>
+      </div>
+      {proposal.uncertainties.length > 0 && (
+        <div style={{ fontSize: 12, marginTop: 6 }}>
+          <strong>Điểm chưa rõ cần xác nhận ({proposal.uncertainties.length}):</strong>
+          {proposal.uncertainties.map((u, i) => (
+            <label key={i} style={{ display: "block", marginTop: 2 }}>
+              <input type="checkbox" checked={!!props.confirmed[i]} onChange={() => props.onConfirm(i)} />{" "}
+              {u.reason}
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
