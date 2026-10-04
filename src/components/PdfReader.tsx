@@ -550,8 +550,18 @@ export default function PdfReader({
                       {quads.map((q, qi) => (
                         <div
                           key={qi}
+                          role={tool === "erase" ? "button" : undefined}
+                          tabIndex={tool === "erase" ? 0 : undefined}
+                          aria-label={tool === "erase" ? `Tẩy highlight: ${i.title ?? i.id}` : undefined}
                           data-item-id={tool === "erase" ? i.id : undefined}
                           onClick={tool === "erase" ? () => onErase(i.id) : undefined}
+                          onKeyDown={
+                            tool === "erase"
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") onErase(i.id);
+                                }
+                              : undefined
+                          }
                           title={i.quote}
                           style={{
                             position: "absolute",
@@ -568,8 +578,18 @@ export default function PdfReader({
                       ))}
                       {rect && (
                         <div
+                          role={tool === "erase" ? "button" : undefined}
+                          tabIndex={tool === "erase" ? 0 : undefined}
+                          aria-label={tool === "erase" ? `Tẩy vùng: ${i.title ?? i.id}` : undefined}
                           data-item-id={tool === "erase" ? i.id : undefined}
                           onClick={tool === "erase" ? () => onErase(i.id) : undefined}
+                          onKeyDown={
+                            tool === "erase"
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") onErase(i.id);
+                                }
+                              : undefined
+                          }
                           title={i.title}
                           style={{
                             position: "absolute",

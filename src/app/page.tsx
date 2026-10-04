@@ -19,7 +19,7 @@ import {
   type SaveState,
 } from "@/lib/types";
 
-type PanelTab = "notes" | "ai" | "docs";
+type PanelTab = "notes" | "ai" | "docs" | "support";
 type GroupMode = "chapter" | "lesson" | "flat";
 type Theme = "light" | "dark";
 type Lang = "vi" | "en";
@@ -95,7 +95,42 @@ const KIND_LABEL: Record<ItemKind, string> = {
 };
 
 const ITEMS_KEY = "vlearn-items-v1";
-const CHAT_KEY = "vlearn-chat-v1";
+const THREADS_KEY = "vlearn-threads-v1";
+const SUPPORT_KEY = "vlearn-support-v1";
+const PROGRESS_KEY = "vlearn-progress-v1";
+const FEEDBACK_KEY = "vlearn-feedback-v1";
+const CONFUSE_KEY = "vlearn-confuse-v1";
+
+interface ChatThread {
+  id: string;
+  title: string;
+  customTitle: boolean;
+  updatedAt: string;
+  messages: ChatMsg[];
+}
+
+interface SupportReply {
+  id: string;
+  from: "learner" | "coach";
+  text: string;
+  at: string;
+}
+
+interface SupportRequest {
+  id: string;
+  learnerId: string;
+  classId: string;
+  kind: "HoTro" | "DiemCong";
+  lessonId: string;
+  partId: string;
+  page?: number;
+  text: string;
+  status: "moi" | "dang_xu_ly" | "da_tra_loi";
+  replies: SupportReply[];
+  createdAt: string;
+}
+
+const CLASSES = ["Lớp AI20k-01", "Lớp AI20k-02"];
 
 function fmtTime(iso: string) {
   // Định dạng thủ công (không dùng toLocaleString trong render).
@@ -143,11 +178,25 @@ function Workspace() {
   const [aiScope, setAiScope] = useState<"page" | "lesson" | "selection">("page");
   const [aiInput, setAiInput] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
-  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [kb, setKb] = useState<KbStatus | null>(null);
   const [kbBusy, setKbBusy] = useState(false);
   const [kbMsg, setKbMsg] = useState("");
   const [videoTs, setVideoTs] = useState(0);
+  const [role, setRole] = useState<"learner" | "coach">("learner");
+  const [support, setSupport] = useState<SupportRequest[]>([]);
+  const [supClass, setSupClass] = useState(CLASSES[0]);
+  const [supKind, setSupKind] = useState<"HoTro" | "DiemCong">("HoTro");
+  const [supText, setSupText] = useState("");
+  const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
+  const [progress, setProgress] = useState<Record<string, string>>({});
+  const [helpful, setHelpful] = useState<Record<string, boolean>>({});
+  const [confuseKind, setConfuseKind] = useState<"kho_hieu" | "be_tac" | "da_hieu" | "">("");
+  const [confuseText, setConfuseText] = useState("");
+  const [confused, setConfused] = useState<Record<string, { kind: string; text: string; at: string }>>({});
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(true);
   const [sideW, setSideW] = useState(248);
@@ -157,12 +206,22 @@ function Workspace() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const kbFileRef = useRef<HTMLInputElement | null>(null);
 
-  // Trạng thái pipeline KB (fetch trong callback — không setState đồng bộ trong effect).
+  // Trạng thái pipeline KB (async/await + try/catch đầy đủ).
   useEffect(() => {
-    fetch("/api/kb/status")
-      .then((r) => r.json())
-      .then((s) => setKb(s as KbStatus))
-      .catch(() => undefined);
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/kb/status");
+        if (!res.ok) return;
+        const s = (await res.json()) as KbStatus;
+        if (alive) setKb(s);
+      } catch {
+        /* offline — giữ trạng thái đang có */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   async function ingestKb(source: { sample: true } | { file: File }) {
@@ -213,8 +272,35 @@ function Workspace() {
       if (lg === "vi" || lg === "en") setLang(lg);
       const storedItems = readLocal<LearningItem[]>(ITEMS_KEY);
       if (Array.isArray(storedItems) && storedItems.length > 0) setItems(storedItems);
-      const storedChat = readLocal<ChatMsg[]>(CHAT_KEY);
-      if (Array.isArray(storedChat)) setChat(storedChat);
+      const storedThreads = readLocal<ChatThread[]>(THREADS_KEY);
+      if (Array.isArray(storedThreads) && storedThreads.length > 0) {
+        setThreads(storedThreads);
+        setActiveThreadId(storedThreads[0].id);
+      } else {
+        // Di trú kho chat đơn cũ (nếu có) thành luồng đầu tiên.
+        const legacy = readLocal<ChatMsg[]>("vlearn-chat-v1");
+        if (Array.isArray(legacy) && legacy.length > 0) {
+          const t0: ChatThread = {
+            id: newClientOperationId(),
+            title: "Cuộc trò chuyện 1",
+            customTitle: false,
+            updatedAt: new Date().toISOString(),
+            messages: legacy,
+          };
+          setThreads([t0]);
+          setActiveThreadId(t0.id);
+        }
+      }
+      const storedSupport = readLocal<SupportRequest[]>(SUPPORT_KEY);
+      if (Array.isArray(storedSupport)) setSupport(storedSupport);
+      const storedProgress = readLocal<Record<string, string>>(PROGRESS_KEY);
+      if (storedProgress && typeof storedProgress === "object") setProgress(storedProgress);
+      const storedHelpful = readLocal<Record<string, boolean>>(FEEDBACK_KEY);
+      if (storedHelpful && typeof storedHelpful === "object") setHelpful(storedHelpful);
+      const storedConfused = readLocal<Record<string, { kind: string; text: string; at: string }>>(CONFUSE_KEY);
+      if (storedConfused && typeof storedConfused === "object") setConfused(storedConfused);
+      const storedRole = localStorage.getItem("vlearn-role");
+      if (storedRole === "coach" || storedRole === "learner") setRole(storedRole);
       const sp = new URLSearchParams(window.location.search);
       if (sp.get("part")) setActivePartId(sp.get("part") as string);
       const pg = Number(sp.get("page"));
@@ -230,10 +316,11 @@ function Workspace() {
     try {
       localStorage.setItem("vlearn-theme", theme);
       localStorage.setItem("vlearn-lang", lang);
+      localStorage.setItem("vlearn-role", role);
     } catch {
       /* bỏ qua */
     }
-  }, [theme, lang]);
+  }, [theme, lang, role]);
 
   useEffect(() => {
     try {
@@ -245,11 +332,97 @@ function Workspace() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_KEY, JSON.stringify(chat));
+      localStorage.setItem(THREADS_KEY, JSON.stringify(threads));
     } catch {
       /* bỏ qua */
     }
-  }, [chat]);
+  }, [threads]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SUPPORT_KEY, JSON.stringify(support));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [support]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [progress]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FEEDBACK_KEY, JSON.stringify(helpful));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [helpful]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CONFUSE_KEY, JSON.stringify(confused));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [confused]);
+
+  // Mobile: matchMedia subscription (setState trong callback — đúng pattern).
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    const apply = () => setIsMobile(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  const activeThread = threads.find((x) => x.id === activeThreadId) ?? null;
+  const chat = activeThread?.messages ?? [];
+
+  function pushMsg(threadId: string, msg: ChatMsg, titleHint?: string) {
+    setThreads((prev) =>
+      prev.map((x) => {
+        if (x.id !== threadId) return x;
+        const title =
+          !x.customTitle && titleHint && x.messages.length === 0
+            ? titleHint.slice(0, 40)
+            : x.title;
+        return { ...x, title, updatedAt: new Date().toISOString(), messages: [...x.messages, msg] };
+      }),
+    );
+  }
+
+  function newThread() {
+    const n = threads.length + 1;
+    const th: ChatThread = {
+      id: newClientOperationId(),
+      title: `Cuộc trò chuyện ${n}`,
+      customTitle: false,
+      updatedAt: new Date().toISOString(),
+      messages: [],
+    };
+    setThreads((prev) => [th, ...prev]);
+    setActiveThreadId(th.id);
+  }
+
+  function renameThread(id: string) {
+    const cur = threads.find((x) => x.id === id);
+    const name = window.prompt("Tên cuộc trò chuyện:", cur?.title ?? "");
+    if (!name || !name.trim()) return;
+    setThreads((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, title: name.trim(), customTitle: true } : x)),
+    );
+  }
+
+  function deleteThread(id: string) {
+    if (!window.confirm("Xóa cuộc trò chuyện này?")) return;
+    const next = threads.filter((x) => x.id !== id);
+    setThreads(next);
+    if (activeThreadId === id) setActiveThreadId(next[0]?.id ?? null);
+  }
 
   // Không dùng useMemo thủ công — React Compiler tự memo.
   let activeLesson = { ch: SEED_COURSE.chapters[0], lesson: SEED_COURSE.chapters[0].lessons[0] };
@@ -314,24 +487,16 @@ function Workspace() {
     }
   }
 
-  // Lưu local prototype: debounce ~600ms, chỉ hiện Đã lưu sau khi ghi xong.
+  // Lưu local prototype: debounce ~600ms. Ghi thực do effect [items] đảm nhiệm
+  // (chạy trước khi lật trạng thái), timer chỉ lật Đã lưu sau khi ghi xong.
   function scheduleAutosave(mut: (prev: LearningItem[]) => LearningItem[]) {
     setItems(mut);
     setSaveState("saving");
     setSaveMsg("Đang lưu…");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      try {
-        setItems((prev) => {
-          localStorage.setItem(ITEMS_KEY, JSON.stringify(prev));
-          return prev;
-        });
-        setSaveState("saved");
-        setSaveMsg("Đã lưu (kho local prototype).");
-      } catch {
-        setSaveState("error");
-        setSaveMsg("Lưu thất bại — bộ nhớ local đầy hoặc bị chặn.");
-      }
+      setSaveState("saved");
+      setSaveMsg("Đã lưu (kho local prototype).");
     }, 600);
   }
 
@@ -513,12 +678,99 @@ function Workspace() {
     setEditingId(null);
   }
 
+  const myId = role === "coach" ? "coach-1" : CURRENT_USER_ID;
+
+  // F27 — Hỗ trợ/Điểm cộng trong prototype (không gửi tới VLearn thật).
+  function sendSupport() {
+    if (!supText.trim()) {
+      setSaveMsg("Nội dung hỗ trợ trống — nhập rồi gửi.");
+      return;
+    }
+    const r: SupportRequest = {
+      id: newClientOperationId(),
+      learnerId: CURRENT_USER_ID,
+      classId: supClass,
+      kind: supKind,
+      lessonId: activeLesson.lesson.id,
+      partId: activePart.id,
+      page: activePart.kind === "pdf" ? page : undefined,
+      text: supText.trim(),
+      status: "moi",
+      replies: [],
+      createdAt: new Date().toISOString(),
+    };
+    setSupport((prev) => [r, ...prev]);
+    setSupText("");
+    setSaveMsg("Đã gửi yêu cầu hỗ trợ (kho local prototype).");
+  }
+
+  function replySupport(id: string) {
+    const text = (replyDraft[id] ?? "").trim();
+    if (!text) return;
+    setSupport((prev) =>
+      prev.map((r) =>
+        r.id === id
+          ? {
+              ...r,
+              status: "da_tra_loi",
+              replies: [
+                ...r.replies,
+                { id: newClientOperationId(), from: role, text, at: new Date().toISOString() },
+              ],
+            }
+          : r,
+      ),
+    );
+    setReplyDraft((prev) => ({ ...prev, [id]: "" }));
+  }
+
+  function setSupStatus(id: string, status: SupportRequest["status"]) {
+    setSupport((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+  }
+
+  // F03 — tiến độ do người học đánh dấu; xem ≠ hiểu.
+  const allLessons = SEED_COURSE.chapters.flatMap((c) => c.lessons);
+  const viewedCount = allLessons.filter((l) => progress[l.id]).length;
+
+  function markViewed() {
+    setProgress((prev) => ({ ...prev, [activeLesson.lesson.id]: new Date().toISOString() }));
+  }
+
+  // F25/F26 — Hữu ích + phản hồi bối rối (khử định danh: không lưu owner/email).
+  function sendConfuse() {
+    if (!confuseKind) {
+      setSaveMsg("Chọn trạng thái (Khó hiểu/Bế tắc/Đã hiểu) rồi gửi.");
+      return;
+    }
+    setConfused((prev) => ({
+      ...prev,
+      [activeLesson.lesson.id]: { kind: confuseKind, text: confuseText.trim(), at: new Date().toISOString() },
+    }));
+    setConfuseKind("");
+    setConfuseText("");
+    setSaveMsg("Đã gửi phản hồi bối rối (ẩn danh — không kèm email/ID).");
+  }
+
   async function sendAi(retryText?: string) {
     const text = (retryText ?? aiInput).trim();
     if (!text || aiBusy) return;
+    // Luôn gửi trong một luồng (tạo mới nếu chưa có) để mở lại sau reload.
+    let tid = activeThreadId;
+    if (!tid || !threads.some((x) => x.id === tid)) {
+      const th: ChatThread = {
+        id: newClientOperationId(),
+        title: text.slice(0, 40),
+        customTitle: false,
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      };
+      setThreads((prev) => [th, ...prev]);
+      setActiveThreadId(th.id);
+      tid = th.id;
+    }
     setAiBusy(true);
     const userMsg: ChatMsg = { id: newClientOperationId(), role: "user", text };
-    setChat((prev) => [...prev, userMsg]);
+    pushMsg(tid, userMsg, text);
     if (!retryText) setAiInput("");
     try {
       const res = await fetch("/api/ai/chat", {
@@ -550,14 +802,14 @@ function Workspace() {
         sources: data.sources as ChatSource[],
         requestId: data.requestId as string,
       };
-      setChat((prev) => [...prev, reply]);
+      pushMsg(tid, reply);
     } catch {
       const err: ChatMsg = {
         id: newClientOperationId(),
         role: "assistant",
         text: "Không gọi được API AI (mất mạng hoặc server lỗi) — câu hỏi vẫn giữ, bấm Gửi lại.",
       };
-      setChat((prev) => [...prev, err]);
+      pushMsg(tid, err);
     } finally {
       setAiBusy(false);
     }
@@ -587,27 +839,31 @@ function Workspace() {
       {/* Header 60px */}
       <header
         style={{
-          height: 60,
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "0 16px",
           background: dark ? "#16212c" : "#FFFFFF",
           borderBottom: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
           position: "sticky",
           top: 0,
           zIndex: 20,
+          ...(isMobile
+            ? { minHeight: 60, height: "auto", flexWrap: "wrap", padding: "8px 16px" }
+            : { height: 60, padding: "0 16px" }),
         }}
       >
         <strong style={{ color: dark ? "#fff" : "#18558B" }}>{t.app}</strong>
         <span style={{ fontSize: 13, opacity: 0.8 }}>
           {SEED_COURSE.title} / {activeLesson.ch.title} / {activeLesson.lesson.title}
         </span>
+        <span style={{ fontSize: 12, opacity: 0.8 }}>
+          Tiến độ {viewedCount}/{allLessons.length}
+        </span>
         <span style={{ flex: 1 }} />
         <button onClick={() => setTab("ai")} style={btn(dark)} aria-label="Trợ giảng AI">
           Trợ giảng AI
         </button>
-        <button onClick={() => setTab("docs")} style={btn(dark)}>
+        <button onClick={() => setTab("support")} style={btn(dark)}>
           {t.support}
         </button>
         <button onClick={() => setTheme(dark ? "light" : "dark")} style={btn(dark)}>
@@ -616,7 +872,52 @@ function Workspace() {
         <button onClick={() => setLang(lang === "vi" ? "en" : "vi")} style={btn(dark)}>
           {lang === "vi" ? "EN" : "VI"}
         </button>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>{CURRENT_USER_ID}</span>
+        <div style={{ position: "relative" }}>
+          <button onClick={() => setAccountOpen((v) => !v)} style={btn(dark)} aria-label="Menu tài khoản">
+            {role === "coach" ? "Coach" : CURRENT_USER_ID} ▾
+          </button>
+          {accountOpen && (
+            <div
+              style={{
+                position: "absolute",
+                right: 0,
+                top: 40,
+                width: 280,
+                background: dark ? "#16212c" : "#FFFFFF",
+                border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                borderRadius: 12,
+                padding: 12,
+                fontSize: 13,
+                zIndex: 30,
+                boxShadow: "0 4px 16px rgba(0,0,0,.15)",
+              }}
+            >
+              <div><strong>Hồ sơ (prototype):</strong> {myId}</div>
+              <div style={{ marginTop: 4 }}>Vai: {role === "coach" ? "Coach" : "Học viên"}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={() => setRole("learner")} style={{ ...btn(dark), fontWeight: role === "learner" ? 700 : 400 }}>
+                  Học viên
+                </button>
+                <button onClick={() => setRole("coach")} style={{ ...btn(dark), fontWeight: role === "coach" ? 700 : 400 }}>
+                  Coach
+                </button>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <strong>Báo cáo tiến độ cá nhân:</strong> {viewedCount}/{allLessons.length} bài đã xem
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                  {allLessons.map((l) => (
+                    <li key={l.id}>
+                      {progress[l.id] ? "✓" : "○"} {l.title}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div style={{ marginTop: 4, opacity: 0.7, fontSize: 12 }}>
+                Dữ liệu từ kho local prototype, không phải production.
+              </div>
+            </div>
+          )}
+        </div>
       </header>
       <div style={{ fontSize: 12, padding: "6px 16px", opacity: 0.75 }}>{t.brandNote}</div>
 
@@ -631,6 +932,17 @@ function Workspace() {
               background: dark ? "#16212c" : "#FFFFFF",
               borderRight: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
               padding: 12,
+              ...(isMobile
+                ? {
+                    position: "fixed",
+                    top: 60,
+                    bottom: 0,
+                    left: 0,
+                    zIndex: 30,
+                    overflowY: "auto",
+                    boxShadow: "0 4px 16px rgba(0,0,0,.2)",
+                  }
+                : {}),
             }}
           >
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -837,6 +1149,71 @@ function Workspace() {
             </div>
           )}
 
+          {/* Tiến độ + phản hồi theo bài đang xem */}
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 13,
+              background: dark ? "#16212c" : "#FFFFFF",
+              border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+              borderRadius: 12,
+              padding: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div>
+              {progress[activeLesson.lesson.id] ? (
+                <span>Đã xem lúc {fmtTime(progress[activeLesson.lesson.id])}.</span>
+              ) : (
+                <button onClick={markViewed} style={btn(dark)}>Đánh dấu đã xem</button>
+              )}{" "}
+              <span style={{ opacity: 0.7, fontSize: 12 }}>
+                Quy tắc: lượt xem không đồng nghĩa đã hiểu; trạng thái Chưa hiểu do bạn đánh dấu trong bộ ghi chú.
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span>Bài này có hữu ích?</span>
+              <button
+                onClick={() => setHelpful((p) => ({ ...p, [activeLesson.lesson.id]: true }))}
+                style={{ ...btn(dark), fontWeight: helpful[activeLesson.lesson.id] === true ? 700 : 400 }}
+              >
+                Hữu ích
+              </button>
+              <button
+                onClick={() => setHelpful((p) => ({ ...p, [activeLesson.lesson.id]: false }))}
+                style={{ ...btn(dark), fontWeight: helpful[activeLesson.lesson.id] === false ? 700 : 400 }}
+              >
+                Chưa hữu ích
+              </button>
+              {confused[activeLesson.lesson.id] && (
+                <span style={{ fontSize: 12, opacity: 0.8 }}>
+                  Đã gửi bối rối: {confused[activeLesson.lesson.id].kind === "kho_hieu" ? "Khó hiểu" : confused[activeLesson.lesson.id].kind === "be_tac" ? "Bế tắc" : "Đã hiểu"}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <label style={{ fontSize: 12 }}>
+                Phản hồi bối rối (tách khỏi Báo lỗi kỹ thuật):{" "}
+                <select value={confuseKind} onChange={(e) => setConfuseKind(e.target.value as typeof confuseKind)}>
+                  <option value="">— chọn —</option>
+                  <option value="kho_hieu">Khó hiểu</option>
+                  <option value="be_tac">Bế tắc</option>
+                  <option value="da_hieu">Đã hiểu</option>
+                </select>
+              </label>
+              <input
+                value={confuseText}
+                onChange={(e) => setConfuseText(e.target.value)}
+                placeholder="Ghi thêm (tùy chọn, ẩn danh)…"
+                aria-label="Nội dung phản hồi bối rối"
+                style={{ ...input(dark), flex: 1, minWidth: 160 }}
+              />
+              <button onClick={sendConfuse} style={btn(dark)}>Gửi</button>
+            </div>
+          </div>
+
           {/* Trạng thái lưu */}
           <div style={{ marginTop: 12, fontSize: 13 }}>
             <span style={{ color: saveColor, fontWeight: 700 }}>
@@ -866,17 +1243,28 @@ function Workspace() {
               display: "flex",
               flexDirection: "column",
               gap: 8,
+              ...(isMobile
+                ? {
+                    position: "fixed",
+                    top: 60,
+                    bottom: 0,
+                    right: 0,
+                    zIndex: 30,
+                    overflowY: "auto",
+                    boxShadow: "0 4px 16px rgba(0,0,0,.2)",
+                  }
+                : {}),
             }}
           >
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {(["notes", "ai", "docs"] as PanelTab[]).map((k) => (
+              {(["notes", "ai", "docs", "support"] as PanelTab[]).map((k) => (
                 <button
                   key={k}
                   onClick={() => setTab(k)}
                   aria-pressed={tab === k}
                   style={{ ...btn(dark), fontWeight: tab === k ? 700 : 400 }}
                 >
-                  {k === "notes" ? t.notes : k === "ai" ? t.ai : t.docs}
+                  {k === "notes" ? t.notes : k === "ai" ? t.ai : k === "docs" ? t.docs : t.support}
                 </button>
               ))}
               <span style={{ flex: 1 }} />
@@ -1120,6 +1508,28 @@ function Workspace() {
                     ))}
                   </div>
                 )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontSize: 12 }}>
+                    Lịch sử ({threads.length}):{" "}
+                    {threads.length === 0 && <span>chưa có — gửi câu đầu tiên để tạo.</span>}
+                    {threads.map((x) => (
+                      <span key={x.id} style={{ marginRight: 6 }}>
+                        <button
+                          onClick={() => setActiveThreadId(x.id)}
+                          style={{ ...btn(dark), fontWeight: x.id === activeThreadId ? 700 : 400 }}
+                        >
+                          {x.title} ({x.messages.length})
+                        </button>{" "}
+                        <button onClick={() => renameThread(x.id)} style={btn(dark)} aria-label={`Đổi tên ${x.title}`}>
+                          ✎
+                        </button>{" "}
+                        <button onClick={() => deleteThread(x.id)} style={btn(dark)} aria-label={`Xóa ${x.title}`}>
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
                   {chat.length === 0 && (
                     <p style={{ fontSize: 13, opacity: 0.7 }}>Chưa có hội thoại. Hỏi một câu để bắt đầu.</p>
@@ -1178,7 +1588,7 @@ function Workspace() {
                   >
                     Gửi lại
                   </button>
-                  <button onClick={() => setChat([])} style={btn(dark)}>
+                  <button onClick={() => newThread()} style={btn(dark)}>
                     Chat mới
                   </button>
                 </div>
@@ -1198,6 +1608,114 @@ function Workspace() {
                     [{new Date(c.ms).toISOString().slice(14, 19)}] {c.text}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {tab === "support" && (
+              <div style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 8 }}>
+                <strong>
+                  Hỗ trợ labcoach ({role === "coach" ? "góc nhìn Coach" : "góc nhìn Học viên"})
+                </strong>
+                <span style={{ opacity: 0.75, fontSize: 12 }}>
+                  Chạy trong prototype — không gửi tới nhân sự VLearn thật, không cộng điểm production.
+                </span>
+                {role === "learner" && (
+                  <>
+                    <label style={{ fontSize: 12 }}>
+                      Lớp:{" "}
+                      <select value={supClass} onChange={(e) => setSupClass(e.target.value)}>
+                        {CLASSES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ fontSize: 12 }}>
+                      Loại:{" "}
+                      <select value={supKind} onChange={(e) => setSupKind(e.target.value as typeof supKind)}>
+                        <option value="HoTro">Hỗ trợ</option>
+                        <option value="DiemCong">Điểm cộng</option>
+                      </select>
+                    </label>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Đính kèm nguồn: {activeLesson.lesson.title} / {activePart.title}
+                      {activePart.kind === "pdf" ? ` / trang ${page}` : ""}
+                    </div>
+                    <textarea
+                      value={supText}
+                      onChange={(e) => setSupText(e.target.value)}
+                      placeholder="Mô tả cần hỗ trợ…"
+                      aria-label="Nội dung yêu cầu hỗ trợ"
+                      rows={3}
+                      style={input(dark)}
+                    />
+                    <button onClick={sendSupport} style={btn(dark)}>Gửi yêu cầu</button>
+                  </>
+                )}
+                {(role === "coach" ? support : support.filter((r) => r.learnerId === CURRENT_USER_ID)).map((r) => (
+                  <article
+                    key={r.id}
+                    style={{
+                      border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      {r.classId} · {r.kind === "HoTro" ? "Hỗ trợ" : "Điểm cộng"} ·{" "}
+                      {r.status === "moi" ? "Mới" : r.status === "dang_xu_ly" ? "Đang xử lý" : "Đã trả lời"} ·{" "}
+                      {fmtTime(r.createdAt)}
+                    </div>
+                    <div style={{ fontSize: 13 }}>{r.text}</div>
+                    <button
+                      onClick={() => {
+                        setActiveLessonId(r.lessonId);
+                        for (const ch of SEED_COURSE.chapters) {
+                          const l = ch.lessons.find((x) => x.id === r.lessonId);
+                          if (l) {
+                            const p = l.parts.find((x) => x.id === r.partId) ?? l.parts[0];
+                            setActivePartId(p.id);
+                            break;
+                          }
+                        }
+                        if (r.page) setPage(r.page);
+                      }}
+                      style={{ ...btn(dark), marginTop: 4 }}
+                    >
+                      Mở nguồn đính kèm
+                    </button>
+                    {r.replies.map((m) => (
+                      <div key={m.id} style={{ fontSize: 12, marginTop: 4, opacity: 0.9 }}>
+                        <strong>{m.from === "coach" ? "Coach" : "Học viên"}:</strong> {m.text}
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <input
+                        value={replyDraft[r.id] ?? ""}
+                        onChange={(e) => setReplyDraft((p) => ({ ...p, [r.id]: e.target.value }))}
+                        placeholder={role === "coach" ? "Coach trả lời…" : "Học viên bổ sung…"}
+                        aria-label="Trả lời hỗ trợ"
+                        style={{ ...input(dark), flex: 1, fontSize: 12 }}
+                      />
+                      <button onClick={() => replySupport(r.id)} style={btn(dark)}>Gửi</button>
+                    </div>
+                    {role === "coach" && (
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        {(["moi", "dang_xu_ly", "da_tra_loi"] as const).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setSupStatus(r.id, s)}
+                            style={{ ...btn(dark), fontWeight: r.status === s ? 700 : 400 }}
+                          >
+                            {s === "moi" ? "Mới" : s === "dang_xu_ly" ? "Đang xử lý" : "Đã trả lời"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                ))}
+                {(role === "coach" ? support : support.filter((r) => r.learnerId === CURRENT_USER_ID)).length === 0 && (
+                  <span>Chưa có yêu cầu nào.</span>
+                )}
               </div>
             )}
           </aside>

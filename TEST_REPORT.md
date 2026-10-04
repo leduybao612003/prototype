@@ -16,7 +16,11 @@ evidence. Phân biệt test tự động/mock với test live.
 | KB-02 | Nạp lại cùng file | PASS | `deduped:true`, chunkCount giữ 8 — không tạo trùng |
 | KB-03 | Hỏi AI → citation mở đúng slide | PASS (API) | sources có page+lessonId, UI có nút mở nguồn theo source; verify click trên browser còn lại |
 | DOC-01 | `react-doctor --no-score` sau fix | PASS (exit 0) | 14 files, 0 error, 3 warnings: giant-component + high-complexity (nợ, tách component ở GĐ C/D), numeric-parse là false-positive (đã guard `Number.isFinite`, fallback 0) |
+| DOC-02 | `react-doctor --no-score` sau đợt chat đa luồng + support + feedback | PASS (exit 0) | 20 files, 0 error, 16 warnings (complexity/giant-component: nợ tách component; text-layer DOM + find tuần tự + overlay pointer: theo thiết kế annotation; numeric-parse: false-positive đã guard; còn lại đã fix: updater side-effect, erase keyboard, static IO cache, fetch status) |
 | T02-thủ-công | Mở `/`, đóng/mở mục lục, resize side/panel, chuyển tab notes/ai/docs | PASS (thủ công) | chưa screenshot chính thức |
+| T20-thủ-công | Chat đa luồng: tạo/mở/đổi tên/xóa, reload giữ nguyên | implemented, chờ thử browser | kho local prototype |
+| T27-thủ-công | Learner gửi Hỗ trợ/Điểm cộng → Coach trả lời đổi trạng thái → learner thấy | implemented, chờ thử browser | kho local prototype, không gửi VLearn thật |
+| F03/F25/F26-thủ-công | Đánh dấu đã xem, Hữu ích/Chưa hữu ích, bối rối ẩn danh, báo cáo tiến độ | implemented, chờ thử browser | quy tắc xem ≠ hiểu hiển thị rõ |
 | T10-thủ-công | Tạo/sửa note từ toolbar và panel dùng cùng ID | PASS (thủ công) | persistence server BLOCKED |
 | T12-thủ-công | Tìm “dinh nghia” (không dấu) ra note “Định nghĩa cần nhớ” | PASS (thủ công) | — |
 

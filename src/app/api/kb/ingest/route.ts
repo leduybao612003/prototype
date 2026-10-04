@@ -5,6 +5,20 @@ import { SAMPLE_DOC_ID } from "@/lib/seed";
 
 export const runtime = "nodejs";
 
+// Cache bản sample trong bộ nhớ module (tránh đọc đĩa mỗi request).
+let sampleCache: { mtimeMs: number; bytes: Uint8Array } | null = null;
+
+async function readSamplePdf(): Promise<Uint8Array> {
+  const { stat } = await import("node:fs/promises");
+  const p = path.join(process.cwd(), "public", "sample.pdf");
+  const st = await stat(p);
+  if (sampleCache && sampleCache.mtimeMs === st.mtimeMs) return sampleCache.bytes;
+  const buf = await readFile(p);
+  const bytes = new Uint8Array(buf);
+  sampleCache = { mtimeMs: st.mtimeMs, bytes };
+  return bytes;
+}
+
 // GET /api/kb/status — trạng thái từng stage + cờ ready.
 export async function GET() {
   return Response.json(await getKbStatus());
@@ -39,8 +53,7 @@ export async function POST(req: Request) {
         );
       }
       filename = "sample.pdf";
-      const buf = await readFile(path.join(process.cwd(), "public", "sample.pdf"));
-      bytes = new Uint8Array(buf);
+      bytes = await readSamplePdf();
     }
   } catch (e) {
     return Response.json(

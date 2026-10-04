@@ -27,7 +27,8 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 |---|---|---|---|---|
 | F01 | Tài khoản (login/logout/session, hiện/ẩn pass, nhớ email, quên/đổi pass) | Quan sát/Đối chiếu | planned (blocked: Supabase Auth) | — |
 | F02 | Khóa/chương/bài + mục lục đóng/mở/resize | Quan sát | implemented (UI) | xem thủ công `/`, chưa test chính thức |
-| F03 | Tiến độ (ghi/đọc, quy tắc doc, xem ≠ hiểu) | Quan sát/Đối chiếu | planned (blocked: DB) | — |
+| F03 | Tiến độ (ghi/đọc, quy tắc doc, xem ≠ hiểu) | Quan sát/Đối chiếu | implemented (đánh dấu đã xem thủ công + quy tắc hiển thị, kho local) | thủ công browser còn lại |
+| F14 | Ghi chú text/sticky (tạo/sửa/kéo/resize, lưu, mở lại) | Quan sát/Đối chiếu | implemented (tạo/sửa/xóa draft local; kéo/resize trên slide chưa làm) | kéo/resize planned |
 | F04 | PDF reader thật, text layer chọn được | Ảnh toolbar | implemented (PDF.js canvas + text layer + worker) | verify trên browser còn lại |
 | F05 | Điều hướng PDF (trang, nhập số, keyboard, thumbnail, deep link) | Quan sát/brief-text | implemented (nav, nhập số, ←/→, thumbnails lazy, deep link `?part=&page=&item=`) | thủ công browser còn lại |
 | F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | implemented (đơn trang, zoom 50–300%, fullscreen) | cuộn dọc liên tục chưa làm |
@@ -38,23 +39,22 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F11 | Tẩy đúng object | Ảnh 05 đã xem | implemented (chế độ tẩy click object) | thủ công browser còn lại |
 | F12 | Undo trang (Ctrl/Cmd+Z khi annotate, không chiếm undo editor) | Ảnh 06 đã xem | implemented (stack id theo instance reader) | undo sau chuyển phần học mất stack — ghi nhận |
 | F13 | Xóa annotation trang hiện tại (confirm + undo, trang khác giữ) | Ảnh 07 đã xem | implemented (confirm + soft delete + Hoàn tác) | thủ công browser còn lại |
-| F14 | Ghi chú text/sticky (tạo/sửa/kéo/resize, lưu, mở lại) | Quan sát/Đối chiếu | implemented (tạo/sửa/xóa draft local) | thủ công; persistence server blocked |
 | F15 | Sổ note và ảnh (mở/đóng, chèn ảnh, reorder/resize) | Quan sát/Đối chiếu | implemented (mở/đóng, chèn ảnh local, reorder cơ bản) | thủ công |
 | F16 | Ghi chú giảng viên (theo nguồn, không cho sửa, empty đúng) | Quan sát | implemented (seed 2 mục, read-only) | thủ công |
 | F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | planned (blocked: AI vision) | — |
 | F18 | Gợi ý câu hỏi theo slide (chọn → trả lời AI thật) | Quan sát | planned (blocked: AI) | — |
 | F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | implemented một phần (prototype nội bộ: nhiều lượt, retry, chat mới, nguồn mở đúng trang, history local; streaming/stop khi có provider) | API đã verify; provider live deferred theo quyết định 05/10/2026 |
-| F20 | Lịch sử AI (chat mới/mở lại/rename/xóa/feedback/dock/resize) | Quan sát/Đối chiếu | planned (blocked: DB+AI) | — |
+| F20 | Lịch sử AI (chat mới/mở lại/rename/xóa/feedback/dock/resize) | Quan sát/Đối chiếu | implemented (đa luồng local: mới/mở/đổi tên/xóa; feedback câu trả lời + dock/resize chưa làm) | thủ công browser còn lại |
 | F21 | Video (play/seek/±10s/volume/tốc độ/chất lượng/fullscreen/PiP/focus/phím tắt) | Quan sát/Đối chiếu | planned (blocked: asset video) | empty state thật |
 | F22 | Transcript (timestamp, click seek, active cue) | Quan sát/Đối chiếu | planned (blocked: asset transcript) | empty state thật |
 | F23 | Note video (timestamp, sửa/sync, mở nguồn seek) | Quan sát + mới | implemented (tạo/sửa draft local) | thủ công; seek thật khi có video |
 | F24 | Tài liệu (xem/tải asset có quyền, empty thật) | Quan sát/Đối chiếu | implemented (liệt kê + empty thật) | thủ công |
-| F25 | Like/dislike, Hữu ích/Chưa hữu ích, bình luận (validate + persistence) | Quan sát/Đối chiếu | planned (blocked: DB) | — |
-| F26 | Phản hồi bối rối (Khó hiểu/Bế tắc/Đã hiểu + text, khử định danh) | Quan sát/Đối chiếu | planned (blocked: DB) | tách luồng với báo lỗi kỹ thuật theo brief |
-| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | planned (blocked: DB) | prototype nội bộ, không gửi VLearn thật |
-| F28 | Menu tài khoản/báo cáo (profile, báo lỗi, báo cáo tiến độ từ dữ liệu thật) | Quan sát/Đối chiếu | planned (blocked: DB) | — |
+| F25 | Like/dislike, Hữu ích/Chưa hữu ích, bình luận (validate + persistence) | Quan sát/Đối chiếu | implemented một phần (Hữu ích/Chưa hữu ích theo bài, kho local; bình luận chưa làm) | bình luận planned |
+| F26 | Phản hồi bối rối (Khó hiểu/Bế tắc/Đã hiểu + text, khử định danh) | Quan sát/Đối chiếu | implemented (form riêng, lưu ẩn danh không owner/email, tách khỏi báo lỗi kỹ thuật) | thủ công browser còn lại |
+| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | implemented (chọn lớp + Hỗ trợ/Điểm cộng + đính kèm nguồn + coach trả lời/đổi trạng thái, chuyển vai learner/coach, kho local) | thủ công browser còn lại; prototype nội bộ |
+| F28 | Menu tài khoản/báo cáo (profile, báo lỗi, báo cáo tiến độ từ dữ liệu thật) | Quan sát/Đối chiếu | implemented một phần (menu tài khoản: profile prototype + chuyển vai + báo cáo tiến độ từ kho local; báo lỗi kỹ thuật chưa tách form riêng) | báo lỗi form planned |
 | F29 | Lab/checkpoint (nội dung, checklist/submission/status thật) | Đối chiếu (chưa xác minh) | planned | không nhận giống lab engine gốc |
-| F30 | Giao diện/ngôn ngữ (sáng/tối, VI/EN control gốc, lưu preference) | Quan sát/Đối chiếu | implemented (VI mặc định, toggle sáng/tối + preference local) | thủ công |
+| F30 | Giao diện/ngôn ngữ (sáng/tối, VI/EN control gốc, lưu preference) | Quan sát/Đối chiếu | implemented (VI mặc định, toggle sáng/tối + preference local; mobile drawer ≤900px) | thủ công |
 
 ## N01–N06 (cải tiến bộ ghi chú + AI chủ động)
 
