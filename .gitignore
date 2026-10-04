@@ -36,6 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# prototype KB: giữ chunks + status để checkout mới có KB sẵn,
+# bỏ qua bản PDF gốc đã upload (trùng với public/sample.pdf)
+data/uploads/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

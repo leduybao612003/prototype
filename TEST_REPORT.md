@@ -11,7 +11,10 @@ evidence. Phân biệt test tự động/mock với test live.
 | BUILD-02 | `npm.cmd run build` (Next 16.3.8 Turbopack) | PASS | exit 0; routes `/`, `/api/health`, `/api/items`, `/api/items/[id]`, `/api/items/[id]/restore`, `/api/lessons/[id]`, `/api/ai/chat` |
 | API-01 | `GET /api/health` trên `npm run start` port 3111 | PASS | `{ok:true, supabaseConfigured:false, aiConfigured:false, storage:"seed-local"}` |
 | API-02 | `GET /api/items?lessonId=k04-l34-p2-t1` | PASS | trả 5 seed items đúng lesson |
-| API-03 | `POST /api/ai/chat` (scope page) khi chưa có key | PASS | 503 `AI_NOT_CONFIGURED` + requestId thật, không fallback mẫu |
+| API-03 | `POST /api/ai/chat` (scope lesson, KB đã nạp) | PASS | `mode:prototype-local`, `kbSource:ingested:sample.pdf`, sources có page+lessonId (tr.7+6 bài blas-solution), requestId thật |
+| KB-01 | `POST /api/kb/ingest {sample:true}` file thật 1,8MB | PASS | ready:true, 11 trang → 8 chunks, stages upload/parse/chunk/index/store ok; trang trống [2,5,9] liệt kê chờ OCR, không bỏ qua âm thầm |
+| KB-02 | Nạp lại cùng file | PASS | `deduped:true`, chunkCount giữ 8 — không tạo trùng |
+| KB-03 | Hỏi AI → citation mở đúng slide | PASS (API) | sources có page+lessonId, UI có nút mở nguồn theo source; verify click trên browser còn lại |
 | DOC-01 | `react-doctor --no-score` sau fix | PASS (exit 0) | 14 files, 0 error, 3 warnings: giant-component + high-complexity (nợ, tách component ở GĐ C/D), numeric-parse là false-positive (đã guard `Number.isFinite`, fallback 0) |
 | T02-thủ-công | Mở `/`, đóng/mở mục lục, resize side/panel, chuyển tab notes/ai/docs | PASS (thủ công) | chưa screenshot chính thức |
 | T10-thủ-công | Tạo/sửa note từ toolbar và panel dùng cùng ID | PASS (thủ công) | persistence server BLOCKED |

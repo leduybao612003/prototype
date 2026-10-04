@@ -27,3 +27,17 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* PDF text layer: chữ trong suốt phủ khít canvas để chọn/bôi đen tự nhiên.
+   Không để màu chữ hiện đè lên trang render. */
+.pdf-text-layer span {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  transform-origin: left top;
+  cursor: text;
+  user-select: text;
+}
+.pdf-text-layer span::selection {
+  background: rgba(24, 85, 139, 0.25);
+}

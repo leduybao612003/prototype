@@ -10,11 +10,16 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 ## Ghi chú kiểm kê (Giai đoạn A)
 - Project: Next.js 16.3.8 App Router + TypeScript (đúng §4). Đã đọc
   `node_modules/next/dist/docs` (index, layouts-and-pages, route-handlers) trước khi code.
-- `references/` vắng mặt → F07–F13 chỉ triển khai theo mô tả chữ trong brief, gắn `basis: brief-text`.
-- Backend/Supabase/AI keys chưa có → mọi mutation bền vững và AI live đang `blocked`
-  (API trả 503 + mã lỗi rõ, không fake success). Xem `.env.example`.
-- Assets thật (PDF selectable nhiều trang, PDF scan, video + transcript, lab) chưa có
-  → reader hiển thị empty state thật; seed hiện tại là dữ liệu chữ JSON trong code.
+- `references/` ban đầu vắng mặt; 05/10/2026 đã nhận 7 ảnh toolbar
+  (Đọc/chọn chữ, Viết tay, Tô sáng, Khoanh vùng, Tẩy, Hoàn tác, Xóa trang) →
+  toolbar reader bám đúng nhãn/tooltip trong ảnh (basis: ảnh đã xem).
+- File mẫu hiện tại: `public/sample.pdf` =
+  `3B-Zone2-BLAS-HackathonPresentation.pdf` (11 trang, thay file F&B).
+  Seed khóa học, tri thức AI và câu hỏi gợi ý dựng lại theo file này.
+- AI theo quyết định 05/10/2026: prototype nội bộ, không provider/key.
+  Pipeline ingestion (`POST /api/kb/ingest`: upload→parse unpdf→chunk giữ
+  metadata→index keyword→store, status từng stage, retry, chống trùng sha256)
+  đã chạy thật trên file mẫu: ready, 8 chunks, trang trống [2,5,9] chờ OCR.
 
 ## F01–F30 (chức năng VLearn giữ lại)
 
@@ -23,22 +28,22 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F01 | Tài khoản (login/logout/session, hiện/ẩn pass, nhớ email, quên/đổi pass) | Quan sát/Đối chiếu | planned (blocked: Supabase Auth) | — |
 | F02 | Khóa/chương/bài + mục lục đóng/mở/resize | Quan sát | implemented (UI) | xem thủ công `/`, chưa test chính thức |
 | F03 | Tiến độ (ghi/đọc, quy tắc doc, xem ≠ hiểu) | Quan sát/Đối chiếu | planned (blocked: DB) | — |
-| F04 | PDF reader thật, text layer chọn được | Ảnh/brief-text | planned (blocked: asset PDF + viewer) | empty state thật |
-| F05 | Điều hướng PDF (trang, nhập số, keyboard, thumbnail, deep link) | Quan sát/brief-text | planned | deep link route `/learn/...` đã định nghĩa, chưa code |
-| F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | planned | — |
-| F07 | Đọc và chọn chữ (selection đúng text, không vẽ khi đọc) | brief-text (ảnh 164849 chưa xem) | planned | — |
-| F08 | Viết tay (pointer/touch, màu/dày, vector theo trang) | brief-text (ảnh 164858 chưa xem) | planned | — |
-| F09 | Highlight (quote + anchor, giữ highlight nét nếu có) | brief-text | planned | — |
-| F10 | Khoanh chưa hiểu (vùng + preview trong notebook) | brief-text | planned | — |
-| F11 | Tẩy đúng object | brief-text | planned | — |
-| F12 | Undo trang (Ctrl/Cmd+Z khi annotate, không chiếm undo editor) | brief-text | planned | — |
-| F13 | Xóa annotation trang hiện tại (confirm + undo, trang khác giữ) | brief-text | planned | — |
+| F04 | PDF reader thật, text layer chọn được | Ảnh toolbar | implemented (PDF.js canvas + text layer + worker) | verify trên browser còn lại |
+| F05 | Điều hướng PDF (trang, nhập số, keyboard, thumbnail, deep link) | Quan sát/brief-text | implemented (nav, nhập số, ←/→, thumbnails lazy, deep link `?part=&page=&item=`) | thủ công browser còn lại |
+| F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | implemented (đơn trang, zoom 50–300%, fullscreen) | cuộn dọc liên tục chưa làm |
+| F07 | Đọc và chọn chữ (selection đúng text, không vẽ khi đọc) | Ảnh 01 đã xem | implemented (text layer span + scaleX) | thủ công browser còn lại |
+| F08 | Viết tay (pointer/touch, màu/dày, vector theo trang) | Ảnh 02 đã xem | implemented (SVG overlay, 3 màu, 2 cỡ, tọa độ chuẩn hóa) | thủ công browser còn lại |
+| F09 | Highlight (quote + anchor, giữ highlight nét nếu có) | Ảnh 03 đã xem | implemented (selection → quads + quote) | thủ công browser còn lại |
+| F10 | Khoanh vùng chưa hiểu (vùng + preview trong notebook) | Ảnh 04 đã xem | implemented (drag rect → region unresolved) | thủ công browser còn lại |
+| F11 | Tẩy đúng object | Ảnh 05 đã xem | implemented (chế độ tẩy click object) | thủ công browser còn lại |
+| F12 | Undo trang (Ctrl/Cmd+Z khi annotate, không chiếm undo editor) | Ảnh 06 đã xem | implemented (stack id theo instance reader) | undo sau chuyển phần học mất stack — ghi nhận |
+| F13 | Xóa annotation trang hiện tại (confirm + undo, trang khác giữ) | Ảnh 07 đã xem | implemented (confirm + soft delete + Hoàn tác) | thủ công browser còn lại |
 | F14 | Ghi chú text/sticky (tạo/sửa/kéo/resize, lưu, mở lại) | Quan sát/Đối chiếu | implemented (tạo/sửa/xóa draft local) | thủ công; persistence server blocked |
 | F15 | Sổ note và ảnh (mở/đóng, chèn ảnh, reorder/resize) | Quan sát/Đối chiếu | implemented (mở/đóng, chèn ảnh local, reorder cơ bản) | thủ công |
 | F16 | Ghi chú giảng viên (theo nguồn, không cho sửa, empty đúng) | Quan sát | implemented (seed 2 mục, read-only) | thủ công |
 | F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | planned (blocked: AI vision) | — |
 | F18 | Gợi ý câu hỏi theo slide (chọn → trả lời AI thật) | Quan sát | planned (blocked: AI) | — |
-| F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | planned (blocked: AI provider) | API `/api/ai/chat` trả 503 thật |
+| F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | implemented một phần (prototype nội bộ: nhiều lượt, retry, chat mới, nguồn mở đúng trang, history local; streaming/stop khi có provider) | API đã verify; provider live deferred theo quyết định 05/10/2026 |
 | F20 | Lịch sử AI (chat mới/mở lại/rename/xóa/feedback/dock/resize) | Quan sát/Đối chiếu | planned (blocked: DB+AI) | — |
 | F21 | Video (play/seek/±10s/volume/tốc độ/chất lượng/fullscreen/PiP/focus/phím tắt) | Quan sát/Đối chiếu | planned (blocked: asset video) | empty state thật |
 | F22 | Transcript (timestamp, click seek, active cue) | Quan sát/Đối chiếu | planned (blocked: asset transcript) | empty state thật |

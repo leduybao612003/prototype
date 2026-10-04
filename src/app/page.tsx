@@ -1,12 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import PdfReader, { type AnnotationPayload } from "@/components/PdfReader";
 import {
   CURRENT_USER_ID,
+  LESSON_START_PAGE,
+  SAMPLE_PDF_URL,
   SEED_COURSE,
   SEED_ITEMS,
   SUGGESTED_QUESTIONS,
 } from "@/lib/seed";
+import { stripVi } from "@/lib/text";
 import {
   newClientOperationId,
   type ItemKind,
@@ -15,11 +19,44 @@ import {
   type SaveState,
 } from "@/lib/types";
 
-type ToolMode = "read" | "write" | "highlight" | "region" | "erase";
 type PanelTab = "notes" | "ai" | "docs";
 type GroupMode = "chapter" | "lesson" | "flat";
 type Theme = "light" | "dark";
 type Lang = "vi" | "en";
+
+interface ChatSource {
+  sectionId: string;
+  title: string;
+  page: number;
+  lessonId: string;
+}
+
+interface ChatMsg {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  sources?: ChatSource[];
+  requestId?: string;
+}
+
+interface KbStage {
+  name: string;
+  status: "pending" | "ok" | "error" | "skipped";
+  detail: string;
+}
+
+interface KbStatus {
+  ready: boolean;
+  documentId: string;
+  filename: string;
+  totalPages: number;
+  chunkCount: number;
+  emptyPages: number[];
+  stages: KbStage[];
+  updatedAt: string;
+  error?: string;
+  deduped?: boolean;
+}
 
 const STR: Record<Lang, Record<string, string>> = {
   vi: {
@@ -57,14 +94,8 @@ const KIND_LABEL: Record<ItemKind, string> = {
   video_note: "Note video",
 };
 
-function stripVi(s: string) {
-  return s
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toLowerCase();
-}
+const ITEMS_KEY = "vlearn-items-v1";
+const CHAT_KEY = "vlearn-chat-v1";
 
 function fmtTime(iso: string) {
   // Định dạng thủ công (không dùng toLocaleString trong render).
@@ -78,32 +109,44 @@ function partLabel(p: LessonPart) {
   return p.kind === "pdf" ? "PDF" : p.kind === "video" ? "Video" : p.kind === "lab" ? "Lab" : "Doc";
 }
 
+function readLocal<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 export default function LearnPage() {
   return <Workspace />;
 }
 
 function Workspace() {
   // Giá trị mặc định đồng nhất server/client (tránh hydration branch).
-  // Preference + deep link (?part=&page=) được nạp 1 lần sau mount.
+  // Kho local prototype (localStorage) + deep link được nạp 1 lần sau mount.
   const [lang, setLang] = useState<Lang>("vi");
   const [theme, setTheme] = useState<Theme>("light");
   const [items, setItems] = useState<LearningItem[]>(SEED_ITEMS);
-  const [activeLessonId, setActiveLessonId] = useState("k04-l34-p2-t1");
-  const [activePartId, setActivePartId] = useState("slide-5");
+  const [activeLessonId, setActiveLessonId] = useState("blas-cover");
+  const [activePartId, setActivePartId] = useState("blas-cover-pdf");
   const [page, setPage] = useState(1);
-  const [tool, setTool] = useState<ToolMode>("read");
   const [tab, setTab] = useState<PanelTab>("notes");
   const [group, setGroup] = useState<GroupMode>("chapter");
   const [query, setQuery] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("saved");
-  const [saveMsg, setSaveMsg] = useState("");
+  const [saveMsg, setSaveMsg] = useState("Dữ liệu mẫu đã sẵn sàng.");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const [newNote, setNewNote] = useState("");
   const [aiScope, setAiScope] = useState<"page" | "lesson" | "selection">("page");
   const [aiInput, setAiInput] = useState("");
-  const [aiMsg, setAiMsg] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [kb, setKb] = useState<KbStatus | null>(null);
+  const [kbBusy, setKbBusy] = useState(false);
+  const [kbMsg, setKbMsg] = useState("");
   const [videoTs, setVideoTs] = useState(0);
   const [outlineOpen, setOutlineOpen] = useState(true);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -112,30 +155,77 @@ function Workspace() {
   const [labDone, setLabDone] = useState<Record<string, boolean>>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const kbFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Trạng thái pipeline KB (fetch trong callback — không setState đồng bộ trong effect).
+  useEffect(() => {
+    fetch("/api/kb/status")
+      .then((r) => r.json())
+      .then((s) => setKb(s as KbStatus))
+      .catch(() => undefined);
+  }, []);
+
+  async function ingestKb(source: { sample: true } | { file: File }) {
+    if (kbBusy) return;
+    setKbBusy(true);
+    setKbMsg("Đang nạp…");
+    try {
+      let res: Response;
+      if ("sample" in source) {
+        res = await fetch("/api/kb/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sample: true }),
+        });
+      } else {
+        const form = new FormData();
+        form.append("file", source.file);
+        res = await fetch("/api/kb/ingest", { method: "POST", body: form });
+      }
+      const s = (await res.json()) as KbStatus;
+      setKb(s);
+      if (s.ready) {
+        setKbMsg(
+          s.deduped
+            ? "File này đã nạp rồi — dùng lại KB cũ, không tạo trùng."
+            : `KB Sẵn sàng: ${s.chunkCount} đoạn / ${s.totalPages} trang. AI sẽ trả lời từ KB mới.`,
+        );
+      } else {
+        setKbMsg(`Nạp chưa xong (${s.error ?? "xem từng stage"}) — sửa rồi bấm Nạp lại.`);
+      }
+    } catch {
+      setKbMsg("Mất mạng khi nạp — bấm Nạp lại.");
+    } finally {
+      setKbBusy(false);
+    }
+  }
 
   const t = STR[lang];
   const dark = theme === "dark";
 
   /* eslint-disable react-hooks/set-state-in-effect -- nạp 1 lần sau mount:
-     preference client-only (theme/lang) + deep link ?part=&page= không có trên server. */
+     preference client-only, kho local prototype và deep link không có trên server. */
   useEffect(() => {
     try {
       const th = localStorage.getItem("vlearn-theme");
       const lg = localStorage.getItem("vlearn-lang");
       if (th === "dark" || th === "light") setTheme(th);
       if (lg === "vi" || lg === "en") setLang(lg);
+      const storedItems = readLocal<LearningItem[]>(ITEMS_KEY);
+      if (Array.isArray(storedItems) && storedItems.length > 0) setItems(storedItems);
+      const storedChat = readLocal<ChatMsg[]>(CHAT_KEY);
+      if (Array.isArray(storedChat)) setChat(storedChat);
       const sp = new URLSearchParams(window.location.search);
       if (sp.get("part")) setActivePartId(sp.get("part") as string);
       const pg = Number(sp.get("page"));
       if (Number.isFinite(pg) && pg > 0) setPage(Math.floor(pg));
-      localStorage.setItem("vlearn-theme", th ?? "light");
-      localStorage.setItem("vlearn-lang", lg ?? "vi");
     } catch {
       /* bỏ qua */
     }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Ghi preference + kho local (đồng bộ ra external system).
   useEffect(() => {
     try {
       localStorage.setItem("vlearn-theme", theme);
@@ -145,7 +235,23 @@ function Workspace() {
     }
   }, [theme, lang]);
 
-  // Không dùng useMemo thủ công — React Compiler tự memo (preserve-manual-memoization).
+  useEffect(() => {
+    try {
+      localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [items]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_KEY, JSON.stringify(chat));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [chat]);
+
+  // Không dùng useMemo thủ công — React Compiler tự memo.
   let activeLesson = { ch: SEED_COURSE.chapters[0], lesson: SEED_COURSE.chapters[0].lessons[0] };
   for (const ch of SEED_COURSE.chapters)
     for (const l of ch.lessons)
@@ -188,44 +294,57 @@ function Workspace() {
 
   const recentlyDeleted = items.filter((i) => i.deletedAt).slice(-3).reverse();
 
-  // Lưu server thử thật qua API; 503 (thiếu Supabase) → giữ draft local + báo rõ.
-  async function persistToServer(path: string, init: RequestInit, opId: string) {
-    setSaveState("saving");
-    setSaveMsg("Đang lưu…");
-    try {
-      const res = await fetch(path, init);
-      if (!res.ok) {
-        let code = `HTTP_${res.status}`;
-        try {
-          const data = await res.json();
-          if (data && typeof data.code === "string") code = data.code;
-        } catch {
-          /* giữ mã HTTP khi body không phải JSON */
-        }
-        setSaveState("error");
-        setSaveMsg(`Lưu thất bại (${code}) — giữ bản nháp local, không mất dữ liệu.`);
-        return false;
+  const pageItems = items.filter(
+    (i) =>
+      !i.deletedAt &&
+      i.partId === activePart.id &&
+      (i.source.pageNumber ?? 0) === page &&
+      (i.kind === "ink" || i.kind === "highlight" || i.kind === "region"),
+  );
+
+  function pickLesson(id: string) {
+    setActiveLessonId(id);
+    for (const ch of SEED_COURSE.chapters) {
+      const l = ch.lessons.find((x) => x.id === id);
+      if (l) {
+        setActivePartId(l.parts[0].id);
+        setPage(LESSON_START_PAGE[id] ?? 1);
+        return;
       }
-      setSaveState("saved");
-      setSaveMsg(`Đã lưu (server ACK, op ${opId.slice(0, 8)}).`);
-      return true;
-    } catch {
-      setSaveState("error");
-      setSaveMsg("Mất mạng khi lưu — giữ bản nháp local, kết nối lại rồi bấm Lưu.");
-      return false;
     }
   }
 
+  // Lưu local prototype: debounce ~600ms, chỉ hiện Đã lưu sau khi ghi xong.
   function scheduleAutosave(mut: (prev: LearningItem[]) => LearningItem[]) {
     setItems(mut);
     setSaveState("saving");
     setSaveMsg("Đang lưu…");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      // Autosave debounce ~600ms (§4). Chưa có backend → đánh dấu draft trung thực.
-      setSaveState("local-draft");
-      setSaveMsg("Bản nháp local (thiếu backend Supabase) — bấm Lưu để thử ghi server.");
+      try {
+        setItems((prev) => {
+          localStorage.setItem(ITEMS_KEY, JSON.stringify(prev));
+          return prev;
+        });
+        setSaveState("saved");
+        setSaveMsg("Đã lưu (kho local prototype).");
+      } catch {
+        setSaveState("error");
+        setSaveMsg("Lưu thất bại — bộ nhớ local đầy hoặc bị chặn.");
+      }
     }, 600);
+  }
+
+  function saveNow() {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    try {
+      localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+      setSaveState("saved");
+      setSaveMsg("Đã lưu (kho local prototype).");
+    } catch {
+      setSaveState("error");
+      setSaveMsg("Lưu thất bại — bộ nhớ local đầy hoặc bị chặn.");
+    }
   }
 
   function sourceNow(): LearningItem["source"] {
@@ -260,6 +379,22 @@ function Workspace() {
     return item;
   }
 
+  // Cầu nối từ PdfReader: annotation canvas → cùng LearningItem với panel.
+  function commitAnnotation(kind: ItemKind, payload: AnnotationPayload): string {
+    const source: LearningItem["source"] = {
+      ...sourceNow(),
+      ...(payload.quads ? { textAnchor: { quads: payload.quads } } : {}),
+      ...(payload.geometry ? { geometry: payload.geometry } : {}),
+    };
+    const item = createItem(kind, {
+      source,
+      quote: payload.quote,
+      vectorData: payload.vectorData,
+      body: payload.body ?? (kind === "region" ? "Mô tả điều chưa hiểu ở vùng đã khoanh…" : ""),
+    });
+    return item.id;
+  }
+
   function defaultTitle(kind: ItemKind) {
     switch (kind) {
       case "highlight":
@@ -275,34 +410,6 @@ function Workspace() {
       default:
         return "Ghi chú mới";
     }
-  }
-
-  // Toolbar: mỗi nút có hành vi thật (tạo item neo đúng nguồn, không vẽ giả lên PDF).
-  function onToolAction(mode: ToolMode) {
-    setTool(mode);
-    if (mode === "read") return;
-    if (mode === "erase") {
-      setSaveMsg("Chế độ tẩy: bấm vào một mục trong danh sách để xóa (có Hoàn tác).");
-      return;
-    }
-    if (mode === "highlight") {
-      createItem("highlight", { quote: "Bôi đen chữ trên slide để tạo quote thật (GĐ C)." });
-      return;
-    }
-    if (mode === "write") {
-      createItem("ink", { vectorData: { strokes: [] } });
-      return;
-    }
-    createItem("region", { body: "Mô tả điều chưa hiểu ở vùng đã khoanh…" });
-  }
-
-  function undoLast() {
-    const last = [...items].reverse().find((i) => !i.deletedAt && i.ownerId === CURRENT_USER_ID);
-    if (!last) {
-      setSaveMsg("Không có thao tác nào để hoàn tác.");
-      return;
-    }
-    softDelete(last.id);
   }
 
   function softDelete(id: string) {
@@ -330,32 +437,28 @@ function Workspace() {
 
   function clearPage() {
     if (!window.confirm(`Xóa các ghi chú của trang ${page}? Có thể Hoàn tác.`)) return;
-    const ids = items
-      .filter(
-        (i) =>
-          !i.deletedAt &&
-          i.partId === activePart.id &&
-          i.source.pageNumber === page &&
-          i.ownerId === CURRENT_USER_ID,
-      )
-      .map((i) => i.id);
-    if (!ids.length) {
+    const idSet = new Set(
+      items
+        .filter(
+          (i) =>
+            !i.deletedAt &&
+            i.partId === activePart.id &&
+            i.source.pageNumber === page &&
+            i.ownerId === CURRENT_USER_ID,
+        )
+        .map((i) => i.id),
+    );
+    if (idSet.size === 0) {
       setSaveMsg("Trang này không có ghi chú nào.");
       return;
     }
     const nowIso = new Date().toISOString();
-    const idSet = new Set(ids);
     scheduleAutosave((prev) =>
       prev.map((i) => (idSet.has(i.id) ? { ...i, deletedAt: nowIso } : i)),
     );
   }
 
-  function openSource(it: LearningItem) {
-    // Deep link /learn/{course}/{lesson}?part=&page=&item= (route mới đề xuất, §4).
-    setActiveLessonId(it.lessonId);
-    setActivePartId(it.partId);
-    if (it.source.pageNumber) setPage(it.source.pageNumber);
-    if (it.source.timestampMs !== undefined) setVideoTs(it.source.timestampMs);
+  function writeDeepLink(it: LearningItem) {
     const url =
       `/learn/${it.courseId}/${it.lessonId}?part=${it.partId}` +
       (it.source.pageNumber ? `&page=${it.source.pageNumber}` : "") +
@@ -367,94 +470,63 @@ function Workspace() {
     }
   }
 
+  function openSource(it: LearningItem) {
+    setActiveLessonId(it.lessonId);
+    setActivePartId(it.partId);
+    if (it.source.pageNumber) setPage(it.source.pageNumber);
+    if (it.source.timestampMs !== undefined) setVideoTs(it.source.timestampMs);
+    writeDeepLink(it);
+  }
+
+  function openAiSource(s: ChatSource) {
+    setActiveLessonId(s.lessonId);
+    for (const ch of SEED_COURSE.chapters) {
+      const l = ch.lessons.find((x) => x.id === s.lessonId);
+      if (l) {
+        setActivePartId(l.parts[0].id);
+        break;
+      }
+    }
+    setPage(s.page);
+  }
+
   function startEdit(it: LearningItem) {
     setEditingId(it.id);
     setEditBody(it.body ?? "");
   }
 
-  async function saveEdit() {
+  function saveEdit() {
     if (!editingId) return;
-    const target = items.find((i) => i.id === editingId);
-    if (!target) return;
-    const updated: LearningItem = {
-      ...target,
-      body: editBody,
-      revision: target.revision + 1,
-      updatedAt: new Date().toISOString(),
-      clientOperationId: newClientOperationId(),
-    };
-    setItems((prev) => prev.map((i) => (i.id === editingId ? updated : i)));
+    scheduleAutosave((prev) =>
+      prev.map((i) =>
+        i.id === editingId
+          ? {
+              ...i,
+              body: editBody,
+              revision: i.revision + 1,
+              updatedAt: new Date().toISOString(),
+              clientOperationId: newClientOperationId(),
+            }
+          : i,
+      ),
+    );
     setEditingId(null);
-    await persistToServer(
-      `/api/items/${editingId}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          body: editBody,
-          revision: updated.revision,
-          clientOperationId: updated.clientOperationId,
-        }),
-      },
-      updated.clientOperationId,
-    );
   }
 
-  async function saveAll() {
-    const pending = items.find((i) => i.ownerId === CURRENT_USER_ID && !i.deletedAt);
-    const opId = newClientOperationId();
-    if (!pending) {
-      // Không có gì mới: vẫn ping health để báo trạng thái backend thật.
-      try {
-        const res = await fetch("/api/health");
-        if (!res.ok) throw new Error(`HTTP_${res.status}`);
-        const h = await res.json();
-        setSaveState(h.supabaseConfigured ? "saved" : "local-draft");
-        setSaveMsg(
-          h.supabaseConfigured
-            ? "Backend sẵn sàng."
-            : "Backend chưa cấu hình (Supabase) — dữ liệu đang ở draft local.",
-        );
-      } catch {
-        setSaveState("error");
-        setSaveMsg("Không tới được server.");
-      }
-      return;
-    }
-    await persistToServer(
-      "/api/items",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          courseId: pending.courseId,
-          chapterId: pending.chapterId,
-          lessonId: pending.lessonId,
-          partId: pending.partId,
-          kind: pending.kind,
-          source: pending.source,
-          title: pending.title,
-          body: pending.body,
-          quote: pending.quote,
-          status: pending.status,
-          clientOperationId: opId,
-        }),
-      },
-      opId,
-    );
-  }
-
-  async function sendAi() {
-    if (!aiInput.trim() || aiBusy) return;
+  async function sendAi(retryText?: string) {
+    const text = (retryText ?? aiInput).trim();
+    if (!text || aiBusy) return;
     setAiBusy(true);
-    setAiMsg("Đang gửi tới /api/ai/chat…");
+    const userMsg: ChatMsg = { id: newClientOperationId(), role: "user", text };
+    setChat((prev) => [...prev, userMsg]);
+    if (!retryText) setAiInput("");
     try {
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           threadId: "thread-local-1",
-          message: aiInput,
+          message: text,
           scope:
             aiScope === "page" ? "page" : aiScope === "lesson" ? "lesson" : "selection",
           scopeIds: {
@@ -462,28 +534,30 @@ function Workspace() {
             partId: activePart.id,
             pageNumber: activePart.kind === "pdf" ? page : undefined,
             itemIds: aiScope === "selection" ? visibleItems.slice(0, 5).map((i) => i.id) : [],
+            quotes:
+              aiScope === "selection"
+                ? visibleItems.slice(0, 5).map((i) => i.quote ?? i.body ?? "").filter(Boolean)
+                : [],
           },
         }),
       });
-      if (!res.ok) {
-        let code: string = `HTTP_${res.status}`;
-        let requestId = "n/a";
-        try {
-          const data = await res.json();
-          if (data && typeof data.code === "string") code = data.code;
-          if (data && typeof data.requestId === "string") requestId = data.requestId;
-        } catch {
-          /* giữ mã HTTP khi body không phải JSON */
-        }
-        setAiMsg(
-          `AI chưa chạy (${code}, requestId ${requestId}). ` +
-            "Giữ nguyên câu hỏi — cấu hình key rồi gửi lại. Không dùng câu trả lời mẫu.",
-        );
-      } else {
-        setAiMsg("Đã nhận câu trả lời (xem panel).");
-      }
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      const data = await res.json();
+      const reply: ChatMsg = {
+        id: newClientOperationId(),
+        role: "assistant",
+        text: data.answer as string,
+        sources: data.sources as ChatSource[],
+        requestId: data.requestId as string,
+      };
+      setChat((prev) => [...prev, reply]);
     } catch {
-      setAiMsg("Mất mạng khi gọi AI — giữ nguyên câu hỏi, thử lại sau.");
+      const err: ChatMsg = {
+        id: newClientOperationId(),
+        role: "assistant",
+        text: "Không gọi được API AI (mất mạng hoặc server lỗi) — câu hỏi vẫn giữ, bấm Gửi lại.",
+      };
+      setChat((prev) => [...prev, err]);
     } finally {
       setAiBusy(false);
     }
@@ -582,11 +656,7 @@ function Workspace() {
                 {ch.lessons.map((l) => (
                   <div key={l.id} style={{ marginLeft: 12, marginTop: 6 }}>
                     <button
-                      onClick={() => {
-                        setActiveLessonId(l.id);
-                        setActivePartId(l.parts[0].id);
-                        setPage(1);
-                      }}
+                      onClick={() => pickLesson(l.id)}
                       style={{
                         ...btn(dark),
                         width: "100%",
@@ -603,7 +673,7 @@ function Workspace() {
                           key={p.id}
                           onClick={() => {
                             setActivePartId(p.id);
-                            setPage(1);
+                            setPage(LESSON_START_PAGE[l.id] ?? 1);
                           }}
                           style={{
                             ...btn(dark),
@@ -637,159 +707,135 @@ function Workspace() {
         <main style={{ flex: 1, padding: 16, minWidth: 0 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
             <strong>{activePart.title}</strong>
-            {activePart.kind === "pdf" && (
-              <span style={{ fontSize: 13 }}>— Trang {page}{activePart.pageCount ? ` / ${activePart.pageCount}` : ""}</span>
-            )}
           </div>
 
-          {/* Toolbar annotation */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }} role="toolbar" aria-label="Công cụ ghi chú">
-            {(
-              [
-                ["read", "Đọc"],
-                ["write", "Viết"],
-                ["highlight", "Highlight"],
-                ["region", "Khoanh chưa hiểu"],
-                ["erase", "Tẩy"],
-              ] as [ToolMode, string][]
-            ).map(([m, label]) => (
-              <button
-                key={m}
-                onClick={() => onToolAction(m)}
-                aria-pressed={tool === m}
-                style={{
-                  ...btn(dark),
-                  borderColor: tool === m ? "#18558B" : undefined,
-                  fontWeight: tool === m ? 700 : 400,
-                }}
-              >
-                {label}
+          {activePart.kind === "pdf" && (
+            <PdfReader
+              key={activePart.id}
+              url={activePart.assetUrl ?? SAMPLE_PDF_URL}
+              page={page}
+              onPageChange={setPage}
+              pageItems={pageItems}
+              onCommit={commitAnnotation}
+              onErase={softDelete}
+              onClearPage={clearPage}
+              dark={dark}
+            />
+          )}
+
+          {activePart.kind === "video" && (
+            <section
+              style={{
+                background: dark ? "#16212c" : "#FFFFFF",
+                border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                borderRadius: 12,
+                padding: 20,
+                minHeight: 200,
+              }}
+            >
+              <p style={{ fontSize: 14 }}>
+                Video thật chưa có asset (BLOCKED). Transcript seed bên dưới vẫn click để đặt
+                timestamp; khi có video, click sẽ seek thật.
+              </p>
+              <label style={{ fontSize: 13 }}>
+                Timestamp note (ms):{" "}
+                <input
+                  type="number"
+                  value={videoTs}
+                  min={0}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setVideoTs(Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+                  }}
+                  style={{ width: 120 }}
+                />
+              </label>{" "}
+              <button onClick={() => createItem("video_note", { body: newNote || "Note tại timestamp hiện tại" })} style={btn(dark)}>
+                Tạo note video
               </button>
-            ))}
-            <button onClick={undoLast} style={btn(dark)}>Hoàn tác</button>
-            <button onClick={clearPage} style={btn(dark)}>Xóa trang này</button>
-            {activePart.kind === "pdf" && (
-              <>
-                <button onClick={() => setPage((p) => Math.max(1, p - 1))} style={btn(dark)}>Slide trước</button>
-                <button
-                  onClick={() => setPage((p) => Math.min(activePart.pageCount ?? 99, p + 1))}
-                  style={btn(dark)}
-                >
-                  Slide sau
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* Vùng tài liệu */}
-          <section
-            style={{
-              background: dark ? "#16212c" : "#FFFFFF",
-              border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
-              borderRadius: 12,
-              padding: 20,
-              minHeight: 320,
-            }}
-          >
-            {activePart.kind === "pdf" && (
-              <div>
-                <p style={{ fontSize: 14 }}>
-                  PDF thật chưa có asset (BLOCKED — chờ file được phép dùng). Text layer chọn
-                  được chữ, annotation overlay và zoom sẽ vào Giai đoạn C.
-                </p>
-                <p style={{ fontSize: 13, opacity: 0.8 }}>
-                  Thao tác hiện tại vẫn neo đúng nguồn: mọi ghi chú tạo từ toolbar/panel
-                  đều lưu documentId và số trang, hiện ngay trong bộ ghi chú.
-                </p>
-                {activePart.instructorNotes?.map((n) => (
-                  <div
-                    key={n.id}
+              <div style={{ marginTop: 12 }}>
+                {(activePart.transcriptCues ?? []).map((c) => (
+                  <button
+                    key={c.ms}
+                    onClick={() => setVideoTs(c.ms)}
                     style={{
-                      marginTop: 12,
-                      padding: 12,
-                      border: `1px dashed ${dark ? "#3b4c5e" : "#9db8cf"}`,
-                      borderRadius: 8,
+                      ...btn(dark),
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      marginTop: 4,
+                      fontWeight: c.ms === videoTs ? 700 : 400,
                     }}
                   >
-                    <strong style={{ fontSize: 13 }}>Ghi chú giảng viên (chỉ đọc): {n.title}</strong>
-                    <p style={{ fontSize: 14, margin: "6px 0 0" }}>{n.body}</p>
-                  </div>
+                    [{new Date(c.ms).toISOString().slice(14, 19)}] {c.text}
+                  </button>
                 ))}
+                {!(activePart.transcriptCues ?? []).length && (
+                  <p style={{ fontSize: 13 }}>Chưa có transcript cho video này.</p>
+                )}
               </div>
-            )}
-            {activePart.kind === "video" && (
-              <div>
-                <p style={{ fontSize: 14 }}>
-                  Video thật chưa có asset (BLOCKED). Transcript seed bên dưới vẫn click để đặt
-                  timestamp; khi có video, click sẽ seek thật.
-                </p>
-                <label style={{ fontSize: 13 }}>
-                  Timestamp note (ms):{" "}
-                  <input
-                    type="number"
-                    value={videoTs}
-                    min={0}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setVideoTs(Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
-                    }}
-                    style={{ width: 120 }}
-                  />
-                </label>{" "}
-                <button onClick={() => createItem("video_note", { body: newNote || "Note tại timestamp hiện tại" })} style={btn(dark)}>
-                  Tạo note video
-                </button>
-                <div style={{ marginTop: 12 }}>
-                  {(activePart.transcriptCues ?? []).map((c) => (
-                    <button
-                      key={c.ms}
-                      onClick={() => setVideoTs(c.ms)}
-                      style={{
-                        ...btn(dark),
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        marginTop: 4,
-                        fontWeight: c.ms === videoTs ? 700 : 400,
-                      }}
-                    >
-                      [{new Date(c.ms).toISOString().slice(14, 19)}] {c.text}
-                    </button>
-                  ))}
-                  {!(activePart.transcriptCues ?? []).length && (
-                    <p style={{ fontSize: 13 }}>Chưa có transcript cho video này.</p>
-                  )}
+            </section>
+          )}
+          {activePart.kind === "lab" && (
+            <section
+              style={{
+                background: dark ? "#16212c" : "#FFFFFF",
+                border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                borderRadius: 12,
+                padding: 20,
+              }}
+            >
+              <p style={{ fontSize: 14 }}>Lab mẫu (checklist lưu local prototype):</p>
+              {["Đọc slide nguồn", "Tạo 1 ghi chú neo đúng trang", "Đánh dấu 1 vùng chưa hiểu"].map(
+                (s) => (
+                  <label key={s} style={{ display: "block", fontSize: 14, marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!labDone[`${activePart.id}-${s}`]}
+                      onChange={(e) =>
+                        setLabDone((p) => ({ ...p, [`${activePart.id}-${s}`]: e.target.checked }))
+                      }
+                    />{" "}
+                    {s}
+                  </label>
+                ),
+              )}
+            </section>
+          )}
+          {activePart.kind === "doc" && (
+            <section
+              style={{
+                background: dark ? "#16212c" : "#FFFFFF",
+                border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                borderRadius: 12,
+                padding: 20,
+              }}
+            >
+              <p style={{ fontSize: 14 }}>Tài liệu đính kèm:</p>
+              {(activePart.attachments ?? []).length === 0 && (
+                <p style={{ fontSize: 13 }}>Trống — đúng trạng thái thật, chưa có asset.</p>
+              )}
+            </section>
+          )}
+
+          {activePart.kind === "pdf" && activePart.instructorNotes && (
+            <div style={{ marginTop: 12 }}>
+              {activePart.instructorNotes.map((n) => (
+                <div
+                  key={n.id}
+                  style={{
+                    padding: 12,
+                    border: `1px dashed ${dark ? "#3b4c5e" : "#9db8cf"}`,
+                    borderRadius: 8,
+                    background: dark ? "#16212c" : "#FFFFFF",
+                  }}
+                >
+                  <strong style={{ fontSize: 13 }}>Ghi chú giảng viên (chỉ đọc): {n.title}</strong>
+                  <p style={{ fontSize: 14, margin: "6px 0 0" }}>{n.body}</p>
                 </div>
-              </div>
-            )}
-            {activePart.kind === "lab" && (
-              <div>
-                <p style={{ fontSize: 14 }}>Lab mẫu (checklist lưu local, server BLOCKED):</p>
-                {["Đọc slide nguồn", "Tạo 1 ghi chú neo đúng trang", "Đánh dấu 1 vùng chưa hiểu"].map(
-                  (s, i) => (
-                    <label key={s} style={{ display: "block", fontSize: 14, marginTop: 6 }}>
-                      <input
-                        type="checkbox"
-                        checked={!!labDone[`${activePart.id}-${i}`]}
-                        onChange={(e) =>
-                          setLabDone((p) => ({ ...p, [`${activePart.id}-${i}`]: e.target.checked }))
-                        }
-                      />{" "}
-                      {s}
-                    </label>
-                  ),
-                )}
-              </div>
-            )}
-            {activePart.kind === "doc" && (
-              <div>
-                <p style={{ fontSize: 14 }}>Tài liệu đính kèm:</p>
-                {(activePart.attachments ?? []).length === 0 && (
-                  <p style={{ fontSize: 13 }}>Trống — đúng trạng thái thật, chưa có asset.</p>
-                )}
-              </div>
-            )}
-          </section>
+              ))}
+            </div>
+          )}
 
           {/* Trạng thái lưu */}
           <div style={{ marginTop: 12, fontSize: 13 }}>
@@ -803,7 +849,7 @@ function Workspace() {
                     : "Bản nháp local"}
             </span>{" "}
             <span style={{ opacity: 0.8 }}>{saveMsg}</span>{" "}
-            <button onClick={saveAll} style={btn(dark)}>{t.save}</button>
+            <button onClick={saveNow} style={btn(dark)}>{t.save}</button>
           </div>
         </main>
 
@@ -895,7 +941,7 @@ function Workspace() {
                       if (!f) return;
                       const url = URL.createObjectURL(f);
                       createItem("image", { title: f.name, assetUrl: url });
-                      setSaveMsg("Ảnh mới chỉ ở local (chưa upload server — Storage BLOCKED).");
+                      setSaveMsg("Ảnh mới chỉ ở local (kho prototype, chưa có Storage server).");
                       e.target.value = "";
                     }}
                   />
@@ -954,8 +1000,8 @@ function Workspace() {
                           {it.ownerId === CURRENT_USER_ID && editingId !== it.id && (
                             <button onClick={() => startEdit(it)} style={btn(dark)}>Sửa</button>
                           )}
-                          {it.ownerId === CURRENT_USER_ID && tool === "erase" && (
-                            <button onClick={() => softDelete(it.id)} style={btn(dark)}>Tẩy mục này</button>
+                          {it.ownerId === CURRENT_USER_ID && (
+                            <button onClick={() => softDelete(it.id)} style={btn(dark)}>Xóa</button>
                           )}
                           {it.ownerId === CURRENT_USER_ID && (
                             <button
@@ -999,6 +1045,63 @@ function Workspace() {
 
             {tab === "ai" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <p style={{ fontSize: 12, opacity: 0.75 }}>
+                  Trợ giảng prototype nội bộ — trả lời từ nội dung file mẫu, không gọi provider.
+                </p>
+                {/* Trạng thái pipeline KB */}
+                <div
+                  style={{
+                    fontSize: 12,
+                    border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                    borderRadius: 8,
+                    padding: 8,
+                  }}
+                >
+                  <div>
+                    <strong>
+                      KB: {kb == null ? "đang kiểm tra…" : kb.ready ? `Sẵn sàng (${kb.chunkCount} đoạn / ${kb.totalPages} trang)` : "Chưa nạp — AI dùng tri thức mẫu"}
+                    </strong>
+                    {kb?.filename ? <span> · {kb.filename}</span> : null}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    <button onClick={() => ingestKb({ sample: true })} disabled={kbBusy} style={btn(dark)}>
+                      Nạp file mẫu
+                    </button>
+                    <button onClick={() => kbFileRef.current?.click()} disabled={kbBusy} style={btn(dark)}>
+                      Chọn PDF khác…
+                    </button>
+                    <button onClick={() => ingestKb({ sample: true })} disabled={kbBusy} style={btn(dark)}>
+                      Nạp lại
+                    </button>
+                    <input
+                      ref={kbFileRef}
+                      type="file"
+                      accept="application/pdf"
+                      hidden
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (f) ingestKb({ file: f });
+                      }}
+                    />
+                  </div>
+                  {kbMsg && <div style={{ marginTop: 4 }}>{kbMsg}</div>}
+                  {kb && kb.stages.length > 0 && (
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                      {kb.stages.map((s) => (
+                        <li key={s.name}>
+                          {s.name}: <strong>{s.status}</strong> — {s.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {kb && kb.emptyPages.length > 0 && (
+                    <div style={{ marginTop: 4 }}>
+                      Trang không trích được text (cần OCR — chưa có engine, không bỏ qua âm thầm):{" "}
+                      {kb.emptyPages.join(", ")}
+                    </div>
+                  )}
+                </div>
                 <label style={{ fontSize: 13 }}>
                   Phạm vi (scope):{" "}
                   <select value={aiScope} onChange={(e) => setAiScope(e.target.value as typeof aiScope)}>
@@ -1017,6 +1120,42 @@ function Workspace() {
                     ))}
                   </div>
                 )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                  {chat.length === 0 && (
+                    <p style={{ fontSize: 13, opacity: 0.7 }}>Chưa có hội thoại. Hỏi một câu để bắt đầu.</p>
+                  )}
+                  {chat.map((m) => (
+                    <div
+                      key={m.id}
+                      style={{
+                        fontSize: 13,
+                        padding: 8,
+                        borderRadius: 8,
+                        background: m.role === "user" ? (dark ? "#1f3a52" : "#E3EEF7") : "transparent",
+                        border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
+                      }}
+                    >
+                      <strong>{m.role === "user" ? "Bạn" : "Trợ giảng"}:</strong> {m.text}
+                      {m.sources && m.sources.length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          Nguồn:{" "}
+                          {m.sources.map((s) => (
+                            <button
+                              key={s.sectionId}
+                              onClick={() => openAiSource(s)}
+                              style={{ ...btn(dark), marginRight: 6, marginTop: 4 }}
+                            >
+                              {s.title} (tr.{s.page})
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {m.requestId && (
+                        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{m.requestId}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
                 <textarea
                   value={aiInput}
                   onChange={(e) => setAiInput(e.target.value)}
@@ -1025,14 +1164,24 @@ function Workspace() {
                   rows={3}
                   style={input(dark)}
                 />
-                <button onClick={sendAi} disabled={aiBusy} style={btn(dark)}>
-                  {t.send}
-                </button>
-                {aiMsg && <p style={{ fontSize: 13 }}>{aiMsg}</p>}
-                <p style={{ fontSize: 12, opacity: 0.75 }}>
-                  AI gọi provider từ server khi có key (GĐ E). Hiện API trả 503 thật, không có
-                  câu trả lời mẫu. Lịch sử chat lưu sau khi có DB.
-                </p>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => sendAi()} disabled={aiBusy} style={btn(dark)}>
+                    {t.send}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const lastUser = [...chat].reverse().find((m) => m.role === "user");
+                      if (lastUser) sendAi(lastUser.text);
+                    }}
+                    disabled={aiBusy}
+                    style={btn(dark)}
+                  >
+                    Gửi lại
+                  </button>
+                  <button onClick={() => setChat([])} style={btn(dark)}>
+                    Chat mới
+                  </button>
+                </div>
               </div>
             )}
 

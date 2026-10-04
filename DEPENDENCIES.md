@@ -15,6 +15,7 @@ còn lại dùng README/package docs công khai + `package-lock.json` làm ngu�
 | @supabase/supabase-js | 2.117.2 | persistence/Auth/Storage (GĐ B) | Apache-2.0 |
 | @supabase/ssr | 0.12.7 | session server/client (GĐ B) | Apache-2.0 |
 | ai | 7.0.127 | Vercel AI SDK streaming (GĐ E; provider adapter thêm khi có key) | Apache-2.0 |
+| unpdf | 1.8.1 | trích text PDF từng trang phía server cho ingestion (không gửi raw cho model) | MIT |
 | tailwindcss / @tailwindcss/postcss | 4.x | design tokens §2 | MIT |
 
 React Bits: chưa chọn component (GĐ F mới đọc repo `DavidHDev/react-bits`, ghi MIT +

@@ -1,0 +1,36 @@
+{
+  "ready": true,
+  "documentId": "doc-3b-hackathon",
+  "filename": "sample.pdf",
+  "sha256": "01fa01a933f4cce10aa46c5c4440583a132825ba049dd29cc523738c7d5939bb",
+  "totalPages": 11,
+  "chunkCount": 8,
+  "emptyPages": [
+    2,
+    5,
+    9
+  ],
+  "stages": [
+    {
+      "name": "upload",
+      "status": "ok",
+      "detail": "sample.pdf (1752KB)."
+    },
+    {
+      "name": "parse",
+      "status": "ok",
+      "detail": "Trích được text 11/11 trang bằng unpdf."
+    },
+    {
+      "name": "chunk",
+      "status": "ok",
+      "detail": "8 đoạn có text; 3 trang trống (2, 5, 9) — cần OCR, chưa có engine (BLOCKED)."
+    },
+    {
+      "name": "index",
+      "status": "ok",
+      "detail": "Keyword index prototype trên 8 đoạn (chưa embedding vector — cần AI provider)."
+    }
+  ],
+  "updatedAt": "2026-10-04T18:55:30.693Z"
+}

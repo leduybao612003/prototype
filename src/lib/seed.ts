@@ -1,8 +1,8 @@
 import type { Course, LearningItem } from "./types";
 
-// Seed tối thiểu theo brief §7: 1 khóa, 2 chương, 3 bài; note đủ loại ở nhiều bài;
-// 2 learner + 1 coach. Nội dung tự biên soạn, không lấy từ VLearn production.
-// PDF/video/lab thật (asset + transcript) đang BLOCKED — xem FEATURE_PARITY.md.
+// Seed theo file PDF mẫu "3B-Zone2-BLAS-HackathonPresentation.pdf"
+// (slide hackathon AI20k LAB Workflow Guide Agent, 11 trang).
+// Mọi bài dùng chung documentId; pageNumber trỏ đúng trang trong file.
 
 export const DEMO_LEARNERS = [
   { id: "learner-1", email: "hocvien1@prototype.local", label: "Học viên 1" },
@@ -15,204 +15,156 @@ export const DEMO_COACH = {
 };
 export const CURRENT_USER_ID = "learner-1";
 
+export const SAMPLE_PDF_URL = "/sample.pdf";
+export const SAMPLE_DOC_ID = "doc-3b-hackathon";
+
+const pdf = (
+  id: string,
+  title: string,
+  instructorNotes?: { id: string; title: string; body: string }[],
+) => ({
+  id,
+  kind: "pdf" as const,
+  title,
+  documentId: SAMPLE_DOC_ID,
+  assetUrl: SAMPLE_PDF_URL,
+  instructorNotes,
+});
+
 export const SEED_COURSE: Course = {
-  id: "k04",
-  title: "Khóa học mẫu K04 (dữ liệu seed prototype)",
+  id: "blas",
+  title: "AI20k LAB Workflow Guide Agent — Slide Hackathon (file mẫu)",
   chapters: [
     {
-      id: "k04-c1",
-      title: "Chương 1 — Phương pháp học",
+      id: "blas-c1",
+      title: "Phần 1 — Vấn đề & Tính khả thi",
       lessons: [
         {
-          id: "k04-l34-p2-t1",
-          title: "Bài 1 — Đọc slide và ghi chú",
+          id: "blas-cover",
+          title: "Bài 1 — Cover + Problem + Survey",
           parts: [
-            {
-              id: "slide-5",
-              kind: "pdf",
-              title: "Slide 5 — Tổng quan (PDF seed, chờ asset thật)",
-              documentId: "doc-slide-5",
-              pageCount: 12,
-              instructorNotes: [
-                {
-                  id: "ins-1",
-                  title: "Dặn dò của giảng viên",
-                  body: "Đọc kỹ định nghĩa ở trang 2 trước khi làm bài tập trang 5.",
-                },
-              ],
-            },
-            {
-              id: "video-1",
-              kind: "video",
-              title: "Video 1 — Cách highlight hiệu quả (chờ asset thật)",
-              videoId: "vid-1",
-              durationMs: 8 * 60 * 1000,
-              transcriptCues: [
-                { ms: 0, text: "[Seed] Mở đầu: vì sao cần ghi chú theo nguồn." },
-                { ms: 45000, text: "[Seed] Ví dụ highlight một định nghĩa." },
-              ],
-            },
+            pdf("blas-cover-pdf", "Cover, Problem, Internal Survey (trang 1–3)", [
+              {
+                id: "ins-0",
+                title: "Dặn dò của giảng viên",
+                body: "Nắm problem statement trang 4 trước khi xem giải pháp ở trang 6–7.",
+              },
+            ]),
           ],
         },
         {
-          id: "k04-l35-lab",
-          title: "Bài 2 — Lab thực hành ghi chú",
-          parts: [
-            {
-              id: "lab-1",
-              kind: "lab",
-              title: "Lab 1 — Checklist ghi chú (mẫu prototype)",
-            },
-          ],
+          id: "blas-feasibility",
+          title: "Bài 2 — Product Feasibility",
+          parts: [pdf("blas-feasibility-pdf", "Problem statement + Solution (trang 4–5)")],
         },
       ],
     },
     {
-      id: "k04-c2",
-      title: "Chương 2 — Ôn tập",
+      id: "blas-c2",
+      title: "Phần 2 — Giải pháp & Kiểm chứng",
       lessons: [
         {
-          id: "k04-l36-review",
-          title: "Bài 3 — Ôn tập và hỏi AI",
-          parts: [
-            {
-              id: "slide-9",
-              kind: "pdf",
-              title: "Slide 9 — Ôn tập (PDF seed, chờ asset thật)",
-              documentId: "doc-slide-9",
-              pageCount: 6,
-            },
-            {
-              id: "doc-attach",
-              kind: "doc",
-              title: "Tài liệu đính kèm mẫu",
-              attachments: [],
-            },
-          ],
+          id: "blas-solution",
+          title: "Bài 3 — Competitors + AI Slice",
+          parts: [pdf("blas-solution-pdf", "Đối thủ + AI Slice + ranh giới (trang 6–7)")],
+        },
+        {
+          id: "blas-ui",
+          title: "Bài 4 — UI Overview",
+          parts: [pdf("blas-ui-pdf", "4 bước sử dụng (trang 8)")],
+        },
+        {
+          id: "blas-validation",
+          title: "Bài 5 — Validation & User Testing",
+          parts: [pdf("blas-validation-pdf", "Metrics + user testing (trang 9–10)")],
         },
       ],
     },
   ],
 };
 
+// Trang bắt đầu đọc mặc định của từng bài.
+export const LESSON_START_PAGE: Record<string, number> = {
+  "blas-cover": 1,
+  "blas-feasibility": 4,
+  "blas-solution": 6,
+  "blas-ui": 8,
+  "blas-validation": 9,
+};
+
 const now = new Date().toISOString();
 
+function seedItem(
+  id: string,
+  lessonId: string,
+  partId: string,
+  kind: LearningItem["kind"],
+  chapterId: string,
+  extra: Partial<LearningItem>,
+): LearningItem {
+  return {
+    id,
+    ownerId: "learner-1",
+    courseId: "blas",
+    chapterId,
+    lessonId,
+    partId,
+    kind,
+    source: { documentId: SAMPLE_DOC_ID, pageNumber: 1 },
+    status: "normal",
+    sortOrder: 1,
+    revision: 1,
+    clientOperationId: `seed-${id}`,
+    createdAt: now,
+    updatedAt: now,
+    ...extra,
+  };
+}
+
 export const SEED_ITEMS: LearningItem[] = [
-  {
-    id: "item-text-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c1",
-    lessonId: "k04-l34-p2-t1",
-    partId: "slide-5",
-    kind: "text",
-    source: { documentId: "doc-slide-5", pageNumber: 2 },
-    title: "Định nghĩa cần nhớ",
-    body: "Ghi chú text mẫu: tóm tắt định nghĩa ở trang 2 bằng lời của mình.",
-    status: "normal",
+  seedItem("item-text-1", "blas-feasibility", "blas-feasibility-pdf", "text", "blas-c1", {
+    source: { documentId: SAMPLE_DOC_ID, pageNumber: 4 },
+    title: "Problem statement",
+    body: "Học viên non-tech khó đọc hiểu file markdown: đâu bắt buộc, đâu gợi ý, quy trình nào, tiêu chí nào.",
     sortOrder: 1,
-    revision: 1,
-    clientOperationId: "seed-text-1",
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: "item-hl-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c1",
-    lessonId: "k04-l34-p2-t1",
-    partId: "slide-5",
-    kind: "highlight",
-    source: { documentId: "doc-slide-5", pageNumber: 2, textAnchor: { start: 0, end: 42 } },
-    quote: "Đoạn trích mẫu được highlight ở trang 2",
+  }),
+  seedItem("item-hl-1", "blas-solution", "blas-solution-pdf", "highlight", "blas-c2", {
+    source: {
+      documentId: SAMPLE_DOC_ID,
+      pageNumber: 7,
+      textAnchor: { start: 0, end: 42 },
+    },
+    quote: "chỉ đưa ra hướng dẫn khi truy xuất được nguồn tương ứng",
     body: "",
-    status: "normal",
     sortOrder: 2,
-    revision: 1,
-    clientOperationId: "seed-hl-1",
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: "item-ink-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c1",
-    lessonId: "k04-l34-p2-t1",
-    partId: "slide-5",
-    kind: "ink",
-    source: { documentId: "doc-slide-5", pageNumber: 3 },
-    title: "Nét viết tay trang 3",
-    vectorData: { strokes: [] },
-    status: "normal",
-    sortOrder: 3,
-    revision: 1,
-    clientOperationId: "seed-ink-1",
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: "item-region-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c1",
-    lessonId: "k04-l34-p2-t1",
-    partId: "slide-5",
-    kind: "region",
-    source: { documentId: "doc-slide-5", pageNumber: 5 },
-    title: "Vùng chưa hiểu trang 5",
-    body: "Chưa hiểu công thức ở vùng đã khoanh.",
+  }),
+  seedItem("item-region-1", "blas-validation", "blas-validation-pdf", "region", "blas-c2", {
+    source: { documentId: SAMPLE_DOC_ID, pageNumber: 10 },
+    title: "Vùng chưa hiểu trang 10",
+    body: "Vì sao hallucination 12,5% mà answer accuracy vẫn 91,7%?",
     status: "unresolved",
-    sortOrder: 4,
-    revision: 1,
-    clientOperationId: "seed-region-1",
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: "item-video-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c1",
-    lessonId: "k04-l34-p2-t1",
-    partId: "video-1",
-    kind: "video_note",
-    source: { videoId: "vid-1", timestampMs: 45000 },
-    title: "Note video 00:45",
-    body: "Ý chính ở phút 00:45.",
-    status: "normal",
-    sortOrder: 5,
-    revision: 1,
-    clientOperationId: "seed-video-1",
-    createdAt: now,
-    updatedAt: now,
-  },
-  {
-    id: "item-image-1",
-    ownerId: "learner-1",
-    courseId: "k04",
-    chapterId: "k04-c2",
-    lessonId: "k04-l36-review",
-    partId: "slide-9",
-    kind: "image",
-    source: { documentId: "doc-slide-9", pageNumber: 1 },
-    title: "Ảnh sơ đồ chụp từ slide",
-    status: "normal",
-    sortOrder: 1,
-    revision: 1,
-    clientOperationId: "seed-image-1",
-    createdAt: now,
-    updatedAt: now,
-  },
+    sortOrder: 3,
+  }),
 ];
 
 export const SUGGESTED_QUESTIONS: { partId: string; questions: string[] }[] = [
   {
-    partId: "slide-5",
+    partId: "blas-feasibility-pdf",
     questions: [
-      "Trang 2 định nghĩa khái niệm gì?",
-      "Vì sao cần ghi chú theo đúng trang nguồn?",
+      "Problem statement của nhóm là gì?",
+      "Bao nhiêu % học viên sẵn sàng dùng sản phẩm?",
     ],
+  },
+  {
+    partId: "blas-solution-pdf",
+    questions: ["AI Slice gồm những gì?", "Must not của Agent là gì?"],
+  },
+  {
+    partId: "blas-ui-pdf",
+    questions: ["4 bước sử dụng là gì?", "Current Step khác Viewing Step thế nào?"],
+  },
+  {
+    partId: "blas-validation-pdf",
+    questions: ["Metric nào chưa đạt?", "Vì sao hallucination 12,5%?"],
   },
 ];
