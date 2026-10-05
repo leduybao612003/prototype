@@ -34,7 +34,7 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | implemented (Từng slide + Cuộn dọc virtualize ±2, zoom 50–300%, fullscreen, giữ annotation) | e2e F-CONT-01–03 + screenshots |
 | F07 | Đọc và chọn chữ (selection đúng text, không vẽ khi đọc) | Ảnh 01 đã xem | implemented (text layer span + scaleX) | thủ công browser còn lại |
 | F08 | Viết tay (pointer/touch, màu/dày, vector theo trang) | Ảnh 02 đã xem | implemented (SVG overlay, 3 màu, 2 cỡ, tọa độ chuẩn hóa) | thủ công browser còn lại |
-| F09 | Highlight (quote + anchor, giữ highlight nét nếu có) | Ảnh 03 đã xem | implemented (selection → quads + quote; sửa điền sẵn body‖quote + hiện quote gốc; lịch sử 5 bản + khôi phục) | e2e FIX-01–03 PASS; thủ công browser còn lại |
+| F09 | Highlight (quote + anchor, giữ highlight nét nếu có) | Ảnh 03 đã xem | implemented (selection → quads + quote; sửa điền sẵn body‖quote + hiện quote gốc; lịch sử 5 bản + khôi phục; đích Tô sáng chung cụm nút với Khoanh vùng: notes→lưu note, ai/support→nháp + Gửi tay) | e2e FIX-01–03 + D-HL-* PASS |
 | F10 | Khoanh vùng chưa hiểu (vùng + preview trong notebook) | Ảnh 04 đã xem | implemented (drag rect → region unresolved kèm crop; đích chốt lúc bắt đầu: notes/ai/support; đổi tab giữa chừng → xác nhận, không tự chuyển; session chống trùng) | e2e F-NOTES/F-SWITCH |
 | F11 | Tẩy đúng object | Ảnh 05 đã xem | implemented (chế độ tẩy click object) | thủ công browser còn lại |
 | F12 | Undo trang (Ctrl/Cmd+Z khi annotate, không chiếm undo editor) | Ảnh 06 đã xem | implemented (stack id theo instance reader) | undo sau chuyển phần học mất stack — ghi nhận |

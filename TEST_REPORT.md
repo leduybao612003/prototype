@@ -127,6 +127,26 @@ theo id (không ghi đè), `pendingSync` + nút Gửi lại, badge Chưa đọc,
 | S-ERR | pageerror | PASS | 0 |
 | S-PROD | Production sau push `5876b0b`: support + health | PASS | `/api/support` → 503 STORE_UNAVAILABLE trung thực (VERCEL gate, không 200-[] giả gây wipe); `/api/health` 200 `aiMode:mock`. Flow learner–coach trên production: local + banner, chờ Supabase để chia sẻ (BLOCKED, đã ghi) |
 
+## E2E đích Tô sáng/Khoanh vùng (Chrome thật, port 3120, build production)
+
+Tô sáng dùng chung cụm nút đích với Khoanh vùng (chỉ khác nhãn “Đoạn chọn sẽ
+vào:”), chuyển tab 2 chiều, đích quyết định luồng: notes→lưu note; AI/support→
+nháp + Gửi tay (không note trùng, không mất nháp khi đổi đích). Screenshots:
+`dest-ai.png`, `dest-region.png`. E2E còn phát hiện: trang 1 cover không có text
+extractable (0 spans PDF.js) nên test chọn chữ chạy ở trang 4.
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| D-HL-NOTES | Đích Ghi chú: chọn chữ → note +quote, 0 request | PASS | 1→2 notes |
+| D-HL-AI-01 | Nút Hỏi trợ giảng → tab AI; chọn → nháp, không note trùng, không tự gửi | PASS | panel nháp + 0 POST |
+| D-HL-AI-02 | Đổi đích qua lại giữa lúc nhập | PASS | nháp + text đang nhập giữ nguyên |
+| D-HL-AI-03 | Gửi tay trong AI | PASS | 1 request chat scope selection, vào lịch sử + nguồn |
+| D-HL-SUP-01 | Nút Yêu cầu hỗ trợ → chọn → nháp quote → Gửi hỗ trợ | PASS | nháp hiện, không note, gửi server thật |
+| D-HL-SUP-02 | Coach phiên khác thấy quote | PASS | “Đoạn chọn đính kèm” hiển thị |
+| D-REGION-DEST | Nút đích khoanh chuyển tab thật (hồi quy) | PASS | aria-pressed tab AI |
+| D-ERR | pageerror | PASS | 0 |
+| D-REGRESS | Toàn bộ e2e-flows (khoanh vùng + support 2 phiên) | PASS | 10/10 |
+
 ## E2E hồi quy nguồn note (Chrome thật, port 3118, build production)
 
 Bug người dùng báo (có ảnh): note tạo ở trang 6 rơi vào nhóm “Problem statement +

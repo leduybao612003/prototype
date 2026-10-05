@@ -28,6 +28,7 @@ const createSchema = z.object({
   page: z.number().int().positive().max(5000).optional(),
   text: z.string().min(1).max(2000),
   crop: z.string().max(1_000_000).optional(),
+  quote: z.string().max(2000).optional(),
   noteId: z.string().max(200).optional(),
   docVersion: z.string().max(100).optional(),
   documentId: z.string().max(100).optional(),

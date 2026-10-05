@@ -71,6 +71,8 @@ interface PdfReaderProps {
   // Session khoanh: start trả sid (chống trùng khi retry), finish gửi crop.
   onRegionStart: (pageNumber: number) => number;
   onRegionFinish: (crop: RegionCrop) => void;
+  // Highlight chọn chữ xong đi qua parent để routing theo đích đang chọn.
+  onHighlightSelect: (sel: { quote: string; quads: Quad[] }, pageNumber: number) => void;
 }
 
 interface Stroke {
@@ -298,8 +300,8 @@ export default function PdfReader(props: PdfReaderProps) {
     <button
       key={d}
       onClick={() => onSelectDestTab(d)}
-      title={`Vùng khoanh sẽ vào: ${label}`}
-      aria-label={`Vùng khoanh sẽ vào: ${label}`}
+      title={`${destTitle} ${label}`}
+      aria-label={`${destTitle} ${label}`}
       aria-pressed={regionTab === d}
       style={{
         ...tbtn(dark),
@@ -312,6 +314,11 @@ export default function PdfReader(props: PdfReaderProps) {
       {label}
     </button>
   );
+
+  // Cụm chọn đích dùng chung cho Khoanh vùng và Tô sáng: cùng kiểu nút, kích
+  // thước, khoảng cách, bo góc, viền, selected/hover/focus — chỉ khác nhãn.
+  const destTitle = tool === "highlight" ? "Đoạn chọn sẽ vào:" : "Vùng khoanh sẽ vào:";
+  const showDest = tool === "region" || tool === "highlight";
 
   const itemsFor = (n: number) =>
     pageItems.filter(
@@ -384,9 +391,9 @@ export default function PdfReader(props: PdfReaderProps) {
         {toolBtn("erase", "Tẩy nét viết, highlight hoặc vùng khoanh", <SvgEraser />)}
         <button onClick={undo} title="Hoàn tác nét cuối trên trang hiện tại (Ctrl/Cmd+Z)" aria-label="Hoàn tác" style={tbtn(dark)}>↩</button>
         <button onClick={onClearPage} title="Xóa annotation trên trang hiện tại" aria-label="Xóa annotation trang" style={tbtn(dark)}>🗑</button>
-        {tool === "region" && (
-          <span style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }} role="group" aria-label="Đích của vùng khoanh">
-            <span style={{ opacity: 0.75 }}>Vùng khoanh sẽ vào:</span>
+        {showDest && (
+          <span style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }} role="group" aria-label={`Đích của ${tool === "highlight" ? "đoạn chọn" : "vùng khoanh"}`}>
+            <span style={{ opacity: 0.75 }}>{destTitle}</span>
             {destBtn("notes", "Lưu vào ghi chú")}
             {destBtn("ai", "Hỏi trợ giảng")}
             {destBtn("support", "Yêu cầu hỗ trợ")}
@@ -441,6 +448,7 @@ export default function PdfReader(props: PdfReaderProps) {
               onErase={onErase}
               onRegionStart={() => props.onRegionStart(page)}
               onRegionFinish={props.onRegionFinish}
+              onHighlightSelect={(sel) => props.onHighlightSelect(sel, page)}
               registerEl={undefined}
             />
           ) : (
@@ -468,6 +476,7 @@ export default function PdfReader(props: PdfReaderProps) {
                   onErase={onErase}
                   onRegionStart={() => props.onRegionStart(n)}
                   onRegionFinish={props.onRegionFinish}
+                  onHighlightSelect={(sel) => props.onHighlightSelect(sel, n)}
                   registerEl={(el) => {
                     if (el) pageEls.current.set(n, el);
                     else pageEls.current.delete(n);
@@ -500,6 +509,7 @@ function PageView({
   onErase,
   onRegionStart,
   onRegionFinish,
+  onHighlightSelect,
   registerEl,
 }: {
   doc: PdfDoc | null;
@@ -517,6 +527,9 @@ function PageView({
   onErase: (id: string) => void;
   onRegionStart: () => number;
   onRegionFinish: (crop: RegionCrop) => void;
+  // Highlight chọn chữ xong đi qua parent để routing theo đích đang chọn
+  // (notes→lưu note; ai/support→nháp, không tự gửi, không trùng note).
+  onHighlightSelect: (sel: { quote: string; quads: Quad[] }) => void;
   registerEl?: (el: HTMLDivElement | null) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -715,7 +728,7 @@ function PageView({
     }
     const quote = sel.toString().trim();
     sel.removeAllRanges();
-    if (quads.length > 0 && quote) commit("highlight", { quote, quads });
+    if (quads.length > 0 && quote) onHighlightSelect({ quote, quads });
   }
 
   if (!active) {

@@ -187,6 +187,7 @@ interface SupportRequest {
   replies: SupportReply[];
   createdAt: string;
   crop?: string;
+  quote?: string;
   noteId?: string;
   rev?: number;
   coachUnread?: boolean;
@@ -209,12 +210,14 @@ interface RegionLock {
   pageNumber: number;
 }
 
-// Bản nháp hỗ trợ từ vùng khoanh: crop + nguồn + nội dung, chờ người học duyệt.
+// Bản nháp hỗ trợ: crop (khoanh) và/hoặc quote (tô sáng) + nguồn đã chốt,
+// chờ người học kiểm tra rồi bấm Gửi.
 interface SupportDraft {
-  crop: string;
-  noteId: string;
+  crop?: string;
+  quote?: string;
+  noteId?: string;
   lock: RegionLock;
-  geometry: { x: number; y: number; w: number; h: number };
+  geometry?: { x: number; y: number; w: number; h: number };
 }
 
 function fmtTime(iso: string) {
@@ -1212,7 +1215,10 @@ function Workspace() {
       page: draft ? draft.lock.pageNumber : activePart.kind === "pdf" ? page : undefined,
       text: supText.trim(),
       documentId: draft ? draft.lock.documentId : activePart.documentId,
-      ...(draft ? { crop: draft.crop, noteId: draft.noteId, docVersion: draft.lock.docVersion } : {}),
+      ...(draft?.crop ? { crop: draft.crop } : {}),
+      ...(draft?.quote ? { quote: draft.quote } : {}),
+      ...(draft?.noteId ? { noteId: draft.noteId } : {}),
+      ...(draft ? { docVersion: draft.lock.docVersion } : {}),
     };
     const fallbackLocal = () => {
       const r: SupportRequest = {
@@ -1229,7 +1235,9 @@ function Workspace() {
         createdAt: new Date().toISOString(),
         rev: 0,
         coachUnread: true,
-        ...(draft ? { crop: draft.crop, noteId: draft.noteId } : {}),
+        ...(draft?.crop ? { crop: draft.crop } : {}),
+        ...(draft?.quote ? { quote: draft.quote } : {}),
+        ...(draft?.noteId ? { noteId: draft.noteId } : {}),
         pendingSync: true,
       };
       setSupport((prev) => [r, ...prev]);
@@ -1314,6 +1322,7 @@ function Workspace() {
       page: r.page,
       text: r.text,
       ...(r.crop ? { crop: r.crop } : {}),
+      ...(r.quote ? { quote: r.quote } : {}),
       ...(r.noteId ? { noteId: r.noteId } : {}),
     };
     fetch("/api/support", {
@@ -1498,6 +1507,11 @@ function Workspace() {
   const committedSids = useRef(new Set<number>());
   const [pendingRegion, setPendingRegion] = useState<{ crop: RegionCrop; lock: RegionLock } | null>(null);
   const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
+  // Nháp đoạn chọn (highlight) cho tab AI: quote + nguồn, chờ Gửi tay.
+  const [selDraft, setSelDraft] = useState<{ quote: string; lock: RegionLock } | null>(null);
+  const [selQ, setSelQ] = useState("");
+  const [selBusy, setSelBusy] = useState(false);
+  const [selErr, setSelErr] = useState("");
 
   function destTab(): RegionDest {
     return tab === "ai" ? "ai" : tab === "support" ? "support" : "notes";
@@ -1538,8 +1552,7 @@ function Workspace() {
     executeRegion(lock.tab, crop, lock);
   }
 
-  function executeRegion(dest: RegionDest, crop: RegionCrop, lock: RegionLock) {
-    // Cả ba luồng dùng chung thao tác chọn vùng nhưng dữ liệu/hành vi riêng.
+  function executeRegion(dest: RegionDest, crop: RegionCrop, lock: RegionLock) {    // Cả ba luồng dùng chung thao tác chọn vùng nhưng dữ liệu/hành vi riêng.
     // Luôn tạo note annotation (F10) kèm crop + nguồn đã chốt — không gọi AI ở đây.
     const id = commitAnnotation(
       "region",
@@ -1566,6 +1579,49 @@ function Workspace() {
       setSaveMsg("Vùng khoanh đã vào bản nháp hỗ trợ — kiểm tra rồi bấm Gửi hỗ trợ.");
     } else {
       setSaveMsg("Đã lưu vùng khoanh vào ghi chú (kèm crop + nguồn) — chưa gọi AI.");
+    }
+  }
+
+  // Mở sẵn các nhóm chứa note mới trong bộ ghi chú (không reset nhóm khác).
+  function expandLock(lock: RegionLock) {
+    setCollapsed((p) => {
+      const n = { ...p };
+      delete n[`ch:${lock.chapterId}`];
+      delete n[`le:${lock.lessonId}`];
+      delete n[`sl:${lock.partId}::${lock.pageNumber}`];
+      return n;
+    });
+  }
+
+  // Highlight chọn chữ xong routing theo đích đang chọn (đồng bộ 2 chiều với
+  // tab qua regionTab). Đổi đích không tự gửi, không tạo note trùng, nháp giữ.
+  function finishHighlight(sel: { quote: string; quads: { x: number; y: number; w: number; h: number }[] }, pageNumber: number) {
+    const dest = destTab();
+    const r = resolveSource(activePart.documentId, pageNumber);
+    const lock: RegionLock = {
+      tab: dest,
+      courseId: SEED_COURSE.id,
+      chapterId: r?.chapterId ?? activeLesson.ch.id,
+      lessonId: r?.lessonId ?? activeLesson.lesson.id,
+      partId: r?.partId ?? activePart.id,
+      documentId: activePart.documentId,
+      docVersion: kb?.sha256 ? kb.sha256.slice(0, 12) : "seed",
+      pageNumber,
+    };
+    if (dest === "notes") {
+      commitAnnotation("highlight", { quote: sel.quote, quads: sel.quads }, pageNumber);
+      expandLock(lock);
+      setSaveMsg("Đã lưu highlight vào ghi chú đúng nguồn.");
+      return;
+    }
+    if (dest === "ai") {
+      setSelDraft({ quote: sel.quote, lock });
+      setTab("ai");
+      setSaveMsg("Đoạn chọn đã vào nháp AI — nhập câu hỏi rồi bấm Gửi.");
+    } else {
+      setSupportDraft({ quote: sel.quote, lock });
+      setTab("support");
+      setSaveMsg("Đoạn chọn đã vào bản nháp hỗ trợ — kiểm tra rồi bấm Gửi hỗ trợ.");
     }
   }
 
@@ -1853,6 +1909,69 @@ function Workspace() {
     } finally {
       streamAbort.current = null;
       setStreaming(false);
+    }
+  }
+
+  // Luồng chat chung: luôn có luồng để mở lại sau reload (giữ hội thoại).
+  function ensureThread(titleHint: string): string {
+    const cur = activeThreadId;
+    if (cur && threads.some((x) => x.id === cur)) return cur;
+    const th: ChatThread = {
+      id: newClientOperationId(),
+      title: titleHint.slice(0, 40),
+      customTitle: false,
+      updatedAt: new Date().toISOString(),
+      messages: [],
+    };
+    setThreads((prev) => [th, ...prev]);
+    setActiveThreadId(th.id);
+    return th.id;
+  }
+
+  // Gửi đoạn chọn (highlight, đích AI) vào luồng chat thật: scope selection +
+  // quotes là text đã chọn (không gửi PDF). Không tự gửi — chỉ khi bấm Gửi.
+  async function sendSelection() {
+    if (!selDraft || selBusy) return;
+    const q = selQ.trim();
+    if (!q) {
+      setSelErr("Nhập câu hỏi về đoạn đã chọn rồi bấm Gửi.");
+      return;
+    }
+    const tid = ensureThread(q);
+    setSelBusy(true);
+    setSelErr("");
+    const userMsg: ChatMsg = { id: newClientOperationId(), role: "user", text: `[Trích trang ${selDraft.lock.pageNumber}] ${q}` };
+    pushMsg(tid, userMsg, q);
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-local-1",
+          message: q,
+          scope: "selection",
+          scopeIds: {
+            lessonId: selDraft.lock.lessonId,
+            partId: selDraft.lock.partId,
+            pageNumber: selDraft.lock.pageNumber,
+            quotes: [selDraft.quote],
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      const data = await res.json();
+      pushMsg(tid, {
+        id: newClientOperationId(),
+        role: "assistant",
+        text: (data as { answer: string }).answer,
+        sources: (data as { sources: ChatSource[] }).sources,
+        requestId: (data as { requestId: string }).requestId,
+      });
+      setSelQ("");
+    } catch {
+      setSelErr("Không gọi được API AI — câu hỏi vẫn giữ, bấm Gửi lại.");
+    } finally {
+      setSelBusy(false);
     }
   }
 
@@ -2733,6 +2852,7 @@ function Workspace() {
               onSelectDestTab={(t) => setTab(t)}
               onRegionStart={startRegion}
               onRegionFinish={finishRegion}
+              onHighlightSelect={finishHighlight}
             />
           )}
 
@@ -3384,6 +3504,41 @@ function Workspace() {
                     </div>
                   </div>
                 )}
+                {selDraft && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      border: `1px solid ${TOK.primary}`,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <strong>Đoạn chọn từ công cụ Tô sáng (chưa gửi)</strong>
+                    <blockquote style={{ margin: "6px 0", opacity: 0.9 }}>
+                      “{selDraft.quote}”
+                    </blockquote>
+                    <div style={{ opacity: 0.8 }}>
+                      Nguồn: {selDraft.lock.lessonId} / {selDraft.lock.partId} / trang{" "}
+                      {selDraft.lock.pageNumber} · tài liệu {selDraft.lock.docVersion}
+                    </div>
+                    <input
+                      value={selQ}
+                      onChange={(e) => setSelQ(e.target.value)}
+                      placeholder="Hỏi gì về đoạn này?…"
+                      aria-label="Câu hỏi về đoạn đã chọn"
+                      style={{ ...input(dark), width: "100%", marginTop: 6 }}
+                    />
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={sendSelection} disabled={selBusy} style={selBusy ? btn(dark) : btnPrimary()}>
+                        {selBusy ? "Đang hỏi…" : "Gửi"}
+                      </button>
+                      <button onClick={() => setSelDraft(null)} style={btn(dark)}>
+                        Bỏ đoạn chọn
+                      </button>
+                    </div>
+                    {selErr && <div style={{ color: "#b42318", marginTop: 4 }}>{selErr}</div>}
+                  </div>
+                )}
                 {/* Trạng thái pipeline KB */}
                 <div
                   style={{
@@ -3610,13 +3765,22 @@ function Workspace() {
                       padding: 8,
                     }}
                   >
-                    <strong>Bản nháp từ vùng khoanh (chưa gửi)</strong>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={supportDraft.crop}
-                      alt="Crop vùng khoanh đính kèm"
-                      style={{ maxWidth: "100%", borderRadius: 6, marginTop: 6 }}
-                    />
+                    <strong>
+                      Bản nháp từ {supportDraft.crop ? "vùng khoanh" : "đoạn chọn"} (chưa gửi)
+                    </strong>
+                    {supportDraft.crop && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={supportDraft.crop}
+                        alt="Crop vùng khoanh đính kèm"
+                        style={{ maxWidth: "100%", borderRadius: 6, marginTop: 6 }}
+                      />
+                    )}
+                    {supportDraft.quote && (
+                      <blockquote style={{ fontSize: 12, margin: "6px 0", opacity: 0.9 }}>
+                        “{supportDraft.quote}”
+                      </blockquote>
+                    )}
                     <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
                       Nguồn đã chốt: {supportDraft.lock.lessonId} / {supportDraft.lock.partId} / trang{" "}
                       {supportDraft.lock.pageNumber} · tài liệu {supportDraft.lock.docVersion}
@@ -3718,6 +3882,11 @@ function Workspace() {
                       </div>
                     )}
                     <div style={{ fontSize: 13 }}>{r.text}</div>
+                    {r.quote && (
+                      <blockquote style={{ fontSize: 12, margin: "4px 0", opacity: 0.9 }}>
+                        Đoạn chọn đính kèm: “{r.quote}”
+                      </blockquote>
+                    )}
                     {r.crop && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img

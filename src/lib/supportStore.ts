@@ -29,6 +29,7 @@ export interface SupportRequest {
   replies: SupportReply[];
   createdAt: string;
   crop?: string;
+  quote?: string;
   noteId?: string;
   docVersion?: string;
   // rev tăng mỗi lần trả lời/đổi trạng thái — client merge lấy bản rev cao hơn.
