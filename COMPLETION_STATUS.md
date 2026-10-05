@@ -50,3 +50,7 @@ Khi có: đặt `AI_MODE=live`, deploy lại, chạy lại T22–T29 live. Code 
 - Deploy Vercel: ĐÃ DEPLOY (`https://prototype-wine-one.vercel.app/`, T34 PASS).
   Đợt này push tiếp: reader Cuộn dọc + routing khoanh + support server.
 - Nợ code còn lại: tách `page.tsx`, 3 unused vars, React Bits component.
+- Fix nguồn note 05/10/2026 (bug ảnh: note tr.6 rơi vào nhóm tr.4–5):
+  `src/lib/lessonMap.ts` resolver chung + chốt nguồn lúc tạo + tự sửa note sai
+  khi nạp + backend check mapping — e2e hồi quy R-SEED/R-CREATE/R-HL/R-CONT/
+  R-KEEP 6/6 PASS. Không xóa/tạo lại note, không đoán tài liệu khác.

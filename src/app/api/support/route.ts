@@ -8,6 +8,7 @@ import {
   type SupportRequest,
 } from "@/lib/supportStore";
 import { newClientOperationId } from "@/lib/types";
+import { resolveSource, SAMPLE_DOC_ID } from "@/lib/lessonMap";
 
 const actorSchema = z.object({
   id: z.string().min(1).max(100),
@@ -26,6 +27,7 @@ const createSchema = z.object({
   crop: z.string().max(1_000_000).optional(),
   noteId: z.string().max(200).optional(),
   docVersion: z.string().max(100).optional(),
+  documentId: z.string().max(100).optional(),
 });
 
 function forbidden(message: string) {
@@ -72,6 +74,19 @@ export async function POST(req: Request) {
   const { actor, ...rest } = parsed.data;
   if (actor.role !== "learner")
     return forbidden("Chỉ học viên tạo yêu cầu hỗ trợ (coach dùng trả lời/đổi trạng thái).");
+  // Kiểm tra mapping nguồn trước khi lưu: document + trang đã biết phải khớp
+  // Chương/Bài/Part khai báo (chống note gán sai nguồn như bug trang 6).
+  if (rest.documentId === SAMPLE_DOC_ID && rest.page) {
+    const r = resolveSource(rest.documentId, rest.page);
+    if (r && (r.lessonId !== rest.lessonId || r.partId !== rest.partId))
+      return Response.json(
+        {
+          code: "MAPPING_MISMATCH",
+          message: `Nguồn khai báo (${rest.lessonId}/${rest.partId}) không khớp mapping trang ${rest.page} (${r.lessonId}/${r.partId}).`,
+        },
+        { status: 400 },
+      );
+  }
   const now = new Date().toISOString();
   const r: SupportRequest = {
     id: newClientOperationId(),

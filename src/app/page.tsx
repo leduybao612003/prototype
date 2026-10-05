@@ -24,6 +24,7 @@ import {
   type SaveState,
 } from "@/lib/types";
 import { TOK, normalCard, unresolvedCard } from "@/lib/theme";
+import { repairItemSources, resolveSource } from "@/lib/lessonMap";
 
 type PanelTab = "notes" | "ai" | "docs" | "support";
 type GroupMode = "chapter" | "lesson" | "flat";
@@ -451,7 +452,17 @@ function Workspace() {
       if (th === "dark" || th === "light") setTheme(th);
       if (lg === "vi" || lg === "en") setLang(lg);
       const storedItems = readLocal<LearningItem[]>(ITEMS_KEY);
-      if (Array.isArray(storedItems) && storedItems.length > 0) setItems(storedItems);
+      if (Array.isArray(storedItems) && storedItems.length > 0) {
+        // Sửa note bị gán sai Chương/Bài theo mapping đã xác minh (giữ noteId,
+        // nội dung, annotation, trạng thái; không xóa/tạo lại, không đoán mò).
+        const { items: repaired, fixed } = repairItemSources(storedItems);
+        setItems(repaired);
+        if (fixed > 0) {
+          setSaveMsg(
+            `Đã sửa nguồn ${fixed} ghi chú về đúng Chương/Bài theo mapping tài liệu (giữ nguyên nội dung).`,
+          );
+        }
+      }
       const storedThreads = readLocal<ChatThread[]>(THREADS_KEY);
       if (Array.isArray(storedThreads) && storedThreads.length > 0) {
         setThreads(storedThreads);
@@ -883,16 +894,36 @@ function Workspace() {
     return { documentId: activePart.documentId, pageNumber: page };
   }
 
-  function createItem(kind: ItemKind, extra: Partial<LearningItem> = {}) {
+  function createItem(
+    kind: ItemKind,
+    extra: Partial<LearningItem> = {},
+    opts: { resolveLesson?: boolean } = {},
+  ) {
     const nowIso = new Date().toISOString();
     const opId = newClientOperationId();
+    // Chốt nguồn lúc tạo: documentId + pageNumber tại thời điểm gọi (không bị
+    // chuyển trang/autosave chậm thay đổi) → resolve về Chương/Bài/Part thực
+    // qua mapping chung. Đứng ở part Bài 1.2 mà tạo ở trang 6 → về Bài 3.
+    const srcDoc = extra.source?.documentId ?? sourceNow().documentId;
+    const srcPage = extra.source?.pageNumber ?? sourceNow().pageNumber;
+    let chapterId = activeLesson.ch.id;
+    let lessonId = activeLesson.lesson.id;
+    let partId = activePart.id;
+    if (opts.resolveLesson !== false) {
+      const r = resolveSource(srcDoc, srcPage);
+      if (r) {
+        chapterId = r.chapterId;
+        lessonId = r.lessonId;
+        partId = r.partId;
+      }
+    }
     const item: LearningItem = {
       id: opId,
       ownerId: CURRENT_USER_ID,
       courseId: SEED_COURSE.id,
-      chapterId: activeLesson.ch.id,
-      lessonId: activeLesson.lesson.id,
-      partId: activePart.id,
+      chapterId,
+      lessonId,
+      partId,
       kind,
       source: sourceNow(),
       status: kind === "region" ? "unresolved" : "normal",
@@ -1131,6 +1162,7 @@ function Workspace() {
       partId: draft ? draft.lock.partId : activePart.id,
       page: draft ? draft.lock.pageNumber : activePart.kind === "pdf" ? page : undefined,
       text: supText.trim(),
+      documentId: draft ? draft.lock.documentId : activePart.documentId,
       ...(draft ? { crop: draft.crop, noteId: draft.noteId, docVersion: draft.lock.docVersion } : {}),
     };
     const fallbackLocal = () => {
@@ -1386,12 +1418,14 @@ function Workspace() {
 
   function startRegion(pageNumber: number): number {
     const sid = ++sessionSeq.current;
+    // Lock nguồn đã resolve (không lấy bài đang mở một cách mù quáng).
+    const r = resolveSource(activePart.documentId, pageNumber);
     regionLocks.current.set(sid, {
       tab: destTab(),
       courseId: SEED_COURSE.id,
-      chapterId: activeLesson.ch.id,
-      lessonId: activeLesson.lesson.id,
-      partId: activePart.id,
+      chapterId: r?.chapterId ?? activeLesson.ch.id,
+      lessonId: r?.lessonId ?? activeLesson.lesson.id,
+      partId: r?.partId ?? activePart.id,
       documentId: activePart.documentId,
       docVersion: kb?.sha256 ? kb.sha256.slice(0, 12) : "seed",
       pageNumber,
@@ -1768,10 +1802,15 @@ function Workspace() {
     };
     if (status === "accepted") {
       // Duyệt: lưu thành note mới kèm provenance; note gốc không thay đổi.
-      createItem("text", {
-        title: `Đã duyệt: ${art.title}`,
-        body: `${draftText}\n\n(Nguồn: ${draftItemIds.length} ghi chú gốc, giữ nguyên.)`,
-      });
+      // Giữ nguyên bài đang tổng hợp (không resolve theo trang).
+      createItem(
+        "text",
+        {
+          title: `Đã duyệt: ${art.title}`,
+          body: `${draftText}\n\n(Nguồn: ${draftItemIds.length} ghi chú gốc, giữ nguyên.)`,
+        },
+        { resolveLesson: false },
+      );
     }
     setArtifacts((prev) => [art, ...prev]);
     setDraftOpen(false);

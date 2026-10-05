@@ -1,4 +1,6 @@
 import type { Course, LearningItem } from "./types";
+import { SAMPLE_DOC_ID } from "./lessonMap";
+export { SAMPLE_DOC_ID };
 
 // Seed theo file PDF mẫu "3B-Zone2-BLAS-HackathonPresentation.pdf"
 // (slide hackathon AI20k LAB Workflow Guide Agent, 11 trang).
@@ -16,7 +18,6 @@ export const DEMO_COACH = {
 export const CURRENT_USER_ID = "learner-1";
 
 export const SAMPLE_PDF_URL = "/sample.pdf";
-export const SAMPLE_DOC_ID = "doc-3b-hackathon";
 
 const pdf = (
   id: string,

@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { PAGE_MAPPINGS } from "./lessonMap";
 
 export type StageStatus = "pending" | "ok" | "error" | "skipped";
 
@@ -45,14 +46,13 @@ const CHUNKS_FILE = path.join(DATA_DIR, "kb-chunks.json");
 const MAX_BYTES = 20 * 1024 * 1024;
 const MIN_CHARS = 50; // trang ít chữ hơn ngưỡng → liệt kê cần OCR, không bỏ qua âm thầm
 
-// Ánh xạ trang → bài học từ file mẫu hackathon (đối chiếu lại khi reader báo số trang thật).
-const PAGE_LESSONS: { from: number; to: number; chapterId: string; lessonId: string }[] = [
-  { from: 1, to: 3, chapterId: "blas-c1", lessonId: "blas-cover" },
-  { from: 4, to: 5, chapterId: "blas-c1", lessonId: "blas-feasibility" },
-  { from: 6, to: 7, chapterId: "blas-c2", lessonId: "blas-solution" },
-  { from: 8, to: 8, chapterId: "blas-c2", lessonId: "blas-ui" },
-  { from: 9, to: 11, chapterId: "blas-c2", lessonId: "blas-validation" },
-];
+// Ánh xạ trang → bài học dùng chung từ lessonMap (một nguồn duy nhất).
+const PAGE_LESSONS = PAGE_MAPPINGS.map((m) => ({
+  from: m.from,
+  to: m.to,
+  chapterId: m.chapterId,
+  lessonId: m.lessonId,
+}));
 
 export function lessonForPage(page: number) {
   const hit = PAGE_LESSONS.find((r) => page >= r.from && page <= r.to);

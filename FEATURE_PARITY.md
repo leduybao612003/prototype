@@ -51,7 +51,7 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F24 | Tài liệu (xem/tải asset có quyền, empty thật) | Quan sát/Đối chiếu | implemented (liệt kê + empty thật) | thủ công |
 | F25 | Like/dislike, Hữu ích/Chưa hữu ích, bình luận (validate + persistence) | Quan sát/Đối chiếu | implemented một phần (Hữu ích/Chưa hữu ích theo bài, kho local; bình luận chưa làm) | bình luận planned |
 | F26 | Phản hồi bối rối (Khó hiểu/Bế tắc/Đã hiểu + text, khử định danh) | Quan sát/Đối chiếu | implemented (form riêng, lưu ẩn danh không owner/email, tách khỏi báo lỗi kỹ thuật) | thủ công browser còn lại |
-| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | implemented (nháp từ vùng khoanh + Gửi hỗ trợ → request lưu server thật; coach đúng lớp nhận/xem crop/mở nguồn/trả lời/đổi trạng thái; quyền kiểm tra ở backend 403; ngã local + banner khi server không ghi) | e2e F-SUP-01–03 (2 phiên) + F-PERM |
+| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | implemented (nháp từ vùng khoanh + Gửi hỗ trợ → request lưu server thật + check mapping nguồn 400; coach đúng lớp nhận/xem crop/mở nguồn/trả lời/đổi trạng thái; quyền kiểm tra ở backend 403; ngã local + banner khi server không ghi) | e2e F-SUP-01–03 (2 phiên) + F-PERM |
 | F28 | Menu tài khoản/báo cáo (profile, báo lỗi, báo cáo tiến độ từ dữ liệu thật) | Quan sát/Đối chiếu | implemented một phần (menu tài khoản: profile prototype + chuyển vai + báo cáo tiến độ từ kho local; báo lỗi kỹ thuật chưa tách form riêng) | báo lỗi form planned |
 | F29 | Lab/checkpoint (nội dung, checklist/submission/status thật) | Đối chiếu (chưa xác minh) | planned | không nhận giống lab engine gốc |
 | F30 | Giao diện/ngôn ngữ (sáng/tối, VI/EN control gốc, lưu preference) | Quan sát/Đối chiếu | implemented (VI mặc định, toggle sáng/tối + preference local; mobile drawer ≤900px) | thủ công |
@@ -60,7 +60,7 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 
 | ID | Chức năng | Trạng thái | Evidence |
 |---|---|---|---|
-| N01 | Bộ ghi chú chung mọi loại item, nhóm chương → bài → nguồn | implemented (cây Chương → Bài → Slide: heading số thứ tự + tên + số lượng + thu gọn/mở rộng, slide hiện số trang + tên tài liệu; local draft + grouping) | e2e UI-05a + screenshots; sync server blocked |
+| N01 | Bộ ghi chú chung mọi loại item, nhóm chương → bài → nguồn | implemented (cây Chương → Bài → Slide + resolver chung `lessonMap` documentId+page→lesson, grouping theo nguồn thực; sortOrder chỉ sắp trong nhóm) | e2e R-SEED/R-CREATE/R-HL/R-CONT/R-KEEP |
 | N02 | Mở nguồn từ note (đúng tài liệu/trang/vùng hoặc timestamp, giữ panel) | implemented (điều hướng nội bộ + deep link `/learn/...` redirect giữ params + mở nhóm chứa note, giữ panel) | e2e UI-03 + BUG-deep-link fixed |
 | N03 | Tự lưu + sync (một nguồn, idempotency, conflict, cross-tab) | implemented một phần (clientOperationId + revision check ở API stub; autosave kiểm tra ghi trước khi đổi state + rollback/err; reorder hoán vị sortOrder; cross-tab storage event) | e2e UI-01a/b; persistence server blocked |
 | N04 | Tìm kiếm note (VI có/không dấu, text/quote/metadata, empty/loading/error) | implemented (tìm local, không dấu) | thủ công; OCR ảnh không tuyên bố |

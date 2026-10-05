@@ -106,6 +106,30 @@ và closure cũ giữ tab khi đổi tab giữa lúc khoanh (đợt này).
 | F-SUP-03 | Learner reload thấy phản hồi + trạng thái | PASS | reply + “Đang xử lý” |
 | F-PERM | Quyền backend: learner khác thấy 0; coach tạo 403; learner đổi trạng thái 403; người lạ trả lời 403; coach sai lớp 403 | PASS | FORBIDDEN đúng 4 trường hợp (server kiểm tra, không chỉ ẩn nút) |
 | F-CONSOLE | pageerror | PASS | 0 |
+
+## E2E hồi quy nguồn note (Chrome thật, port 3118, build production)
+
+Bug người dùng báo (có ảnh): note tạo ở trang 6 rơi vào nhóm “Problem statement +
+Solution (trang 4–5)” thay vì Chương 2. Điều tra từ code: `createItem` gán
+lesson/part theo **bài đang mở** + page hiện tại (PDF 1 file chung, ô nhập trang
+cho gõ 1–11 ở mọi bài) → metadata sai, render group đúng theo metadata.
+Không lệch 0/1-based, không fallback chương đầu ở grouping.
+Fix: `src/lib/lessonMap.ts` (resolver chung documentId+page→chapter/lesson/part,
+không fallback câm) + chốt nguồn lúc tạo + tự sửa note sai khi nạp (giữ
+noteId/nội dung/annotation/status) + backend support check mapping (400
+MAPPING_MISMATCH). E2E còn bắt thêm 2 vấn đề thật đã fix: clamp ô nhập trang
+dùng `numPages||1` khi doc chưa tải, và smooth-scroll làm tracking đọc nhầm
+trang giữa chừng (đổi sang nhảy tức thì).
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| R-SEED | Chèn note sai (tr.6 gán Bài 1.2) → reload | PASS | tự sửa về Slide tr.6 Bài 2.1, nội dung còn, không nhân bản |
+| R-CREATE | Note nhanh ở trang 5, 6, 7, 8 | PASS | 5→Bài 1.2, 6→2.1, 7→2.1, 8→2.2; tr.6 không dưới nhóm 4–5 |
+| R-HL | Đổi trang nhanh + highlight + chờ autosave | PASS | vào đúng nhóm theo trang thực tế |
+| R-CONT | Cuộn dọc, khoanh trang 9 | PASS | note tr.9 vào Bài 2.3 (Metrices/user testing) |
+| R-KEEP | Reload → tìm/reorder/mở nguồn | PASS | found=1, đúng tr.6, header Bài 3 |
+| R-CONSOLE | pageerror | PASS | 0 |
+| R-PERM-SRC | Support sai mapping lesson/part | PASS — API | 400 MAPPING_MISMATCH (verify cùng đợt F-PERM) |
 | T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 

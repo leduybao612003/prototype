@@ -184,9 +184,10 @@ export default function PdfReader(props: PdfReaderProps) {
     const el = pageEls.current.get(n);
     const sc = scrollerRef.current;
     if (el && sc) {
+      // Nhảy tức thì (không smooth): tracking trang xác định, test/dev đoán được.
       const r = el.getBoundingClientRect();
       const sr = sc.getBoundingClientRect();
-      sc.scrollTo({ top: sc.scrollTop + (r.top - sr.top) - 8, behavior: "smooth" });
+      sc.scrollTo({ top: sc.scrollTop + (r.top - sr.top) - 8, behavior: "auto" });
     } else {
       onPageChange(clamp(n, 1, numPages || 1));
     }
@@ -359,7 +360,9 @@ export default function PdfReader(props: PdfReaderProps) {
           max={numPages || 1}
           onChange={(e) => {
             const v = Number(e.target.value);
-            if (Number.isFinite(v)) pickThumb(clamp(Math.floor(v), 1, numPages || 1));
+            // Khi tài liệu chưa tải (numPages=0) không kẹp về 1 — clamp effect
+            // sẽ đưa về đúng khi biết tổng số trang.
+            if (Number.isFinite(v)) pickThumb(numPages > 0 ? clamp(Math.floor(v), 1, numPages) : Math.max(1, Math.floor(v)));
           }}
           aria-label="Số trang"
           style={{ ...tinput(dark), width: 52, textAlign: "center" }}
