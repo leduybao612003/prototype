@@ -623,19 +623,43 @@ export default function PdfReader({
                                 }
                               : undefined
                           }
-                          title={i.title}
+                          title={i.status === "unresolved" ? `Chưa hiểu: ${i.title}` : i.title}
                           style={{
                             position: "absolute",
                             left: `${rect.x * 100}%`,
                             top: `${rect.y * 100}%`,
                             width: `${rect.w * 100}%`,
                             height: `${rect.h * 100}%`,
-                            border: "2px dashed #dc2626",
-                            background: "rgba(220,38,38,.06)",
+                            // Đồng bộ trạng thái Chưa hiểu với panel: viền cam + badge,
+                            // không chỉ dựa vào màu (có nhãn chữ "?" + title).
+                            border: i.status === "unresolved" ? "2px solid #F5822B" : "2px dashed #dc2626",
+                            background:
+                              i.status === "unresolved" ? "rgba(245,130,43,.12)" : "rgba(220,38,38,.06)",
                             pointerEvents: tool === "erase" ? "auto" : "none",
                             cursor: tool === "erase" ? "cell" : "default",
                           }}
-                        />
+                        >
+                          {i.status === "unresolved" && (
+                            <span
+                              title="Chưa hiểu (đồng bộ với bộ ghi chú)"
+                              style={{
+                                position: "absolute",
+                                top: -12,
+                                right: -8,
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: "#3A1F05",
+                                background: "#F5822B",
+                                borderRadius: 8,
+                                padding: "0 6px",
+                                lineHeight: "18px",
+                                pointerEvents: "none",
+                              }}
+                            >
+                              ? Chưa hiểu
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   );

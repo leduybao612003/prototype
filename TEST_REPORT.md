@@ -55,6 +55,23 @@ screenshots trong thư mục temp phiên chạy). Fresh profile → localStorage
 | M-E2E-04 | Khoanh vùng → panel AI + crop thật → hỏi → đáp mock | PASS — MOCK | crop hiển thị thật; answer `[MÔ PHỎNG vision — chưa đọc chữ trong ảnh]`; e2e-vision.png |
 | CONSOLE | pageerror trong suốt e2e | PASS | 0 pageerror |
 | RWD-01 | Viewport mobile 390×844: drawer mục lục + tab AI truy cập được | PASS | outline=1, aiTab=2, 0 pageerror; e2e-mobile.png |
+
+## E2E UI tokens/phân cấp/kéo thả/Chưa hiểu (Chrome thật, port 3115, build production)
+
+Script 1 lần (không commit). Screenshots: `ui-before.png` (phân cấp + handle),
+`ui-reorder-after.png`, `ui-unresolved.png` (card cam + badge slide), `ui-mobile.png`.
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| UI-01a | Nút ↓ đổi thứ tự 2 note cùng slide | PASS | đổi đúng cặp |
+| UI-01b | Reload sau reorder | PASS | thứ tự giữ nguyên (sortOrder hoán vị, không bản sao) |
+| UI-02 | Sửa note (Sửa→Lưu) | PASS | nội dung mới, thứ tự nguyên, không kéo card |
+| UI-03 | Mở nguồn sau reorder | PASS | đúng trang 4, URL `page=4` |
+| UI-04 | Khoanh vùng → Chưa hiểu → reload → Mở nguồn | PASS | card cam + badge ⚠, nút ✓ active, badge `? Chưa hiểu` trên slide còn sau reload |
+| UI-05a | Thu gọn Chương 1, tìm “hallucination”, reorder bằng keyboard | PASS | ẩn/hiện đúng, tìm đúng, ArrowDown trên handle |
+| UI-05b | Mobile 390px | PASS | drawer + panel truy cập được |
+| UI-CONSOLE | pageerror suốt e2e UI | PASS | 0 |
+| BUG-deep-link | Reload ở URL `/learn/...` (do Mở nguồn ghi) → 404, không canvas | FIXED | thêm route `learn/[courseId]/[lessonId]` redirect giữ params; e2e reload deep URL PASS |
 | T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 

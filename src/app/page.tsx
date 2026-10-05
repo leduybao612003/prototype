@@ -18,6 +18,7 @@ import {
   type LessonPart,
   type SaveState,
 } from "@/lib/types";
+import { TOK, normalCard, unresolvedCard } from "@/lib/theme";
 
 type PanelTab = "notes" | "ai" | "docs" | "support";
 type GroupMode = "chapter" | "lesson" | "flat";
@@ -147,6 +148,7 @@ const FEEDBACK_KEY = "vlearn-feedback-v1";
 const CONFUSE_KEY = "vlearn-confuse-v1";
 const ARTIFACT_KEY = "vlearn-artifacts-v1";
 const MINDMAPS_KEY = "vlearn-mindmaps-v1";
+const GROUPS_KEY = "vlearn-groups-v1";
 const COMMENTS_KEY = "vlearn-comments-v1";
 const BUGS_KEY = "vlearn-bugs-v1";
 
@@ -334,6 +336,14 @@ function Workspace() {
   const [labDone, setLabDone] = useState<Record<string, boolean>>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemsRef = useRef<LearningItem[]>(SEED_ITEMS);
+  // Phân cấp ghi chú Chương→Bài→Slide: nhóm nào đóng/mở (mặc định mở).
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Kéo thả sắp xếp trong cùng slide: id đang kéo + vị trí chèn.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragGroup, setDragGroup] = useState<string | null>(null);
+  const [dropBefore, setDropBefore] = useState<string | null>(null);
+  const notesScrollRef = useRef<HTMLDivElement | null>(null);
+  const lastGood = useRef<LearningItem[]>(SEED_ITEMS);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const kbFileRef = useRef<HTMLInputElement | null>(null);
 
@@ -446,6 +456,8 @@ function Workspace() {
       if (storedComments && typeof storedComments === "object") setComments(storedComments);
       const storedBugs = readLocal<BugReport[]>(BUGS_KEY);
       if (Array.isArray(storedBugs)) setBugs(storedBugs);
+      const storedGroups = readLocal<Record<string, boolean>>(GROUPS_KEY);
+      if (storedGroups && typeof storedGroups === "object") setCollapsed(storedGroups);
       const storedRole = localStorage.getItem("vlearn-role");
       if (storedRole === "coach" || storedRole === "learner") setRole(storedRole);
       const sp = new URLSearchParams(window.location.search);
@@ -471,10 +483,19 @@ function Workspace() {
 
   useEffect(() => {
     itemsRef.current = items;
+    // Ghi thẳng (mirror cho mọi nguồn đổi items, kể cả cross-tab). Lỗi quota
+    // cực hiếm ở đây vì scheduleAutosave đã kiểm tra trước; nếu vẫn lỗi thì
+    // báo + phục hồi ở microtask (không setState đồng bộ trong effect).
     try {
       localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+      lastGood.current = items;
     } catch {
-      /* bỏ qua */
+      queueMicrotask(() => {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        setSaveState("error");
+        setSaveMsg("Lưu thất bại — đã phục hồi bản trước đó, thứ tự và nội dung giữ nguyên.");
+        setItems(lastGood.current);
+      });
     }
   }, [items]);
 
@@ -549,6 +570,14 @@ function Workspace() {
       /* bỏ qua */
     }
   }, [bugs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GROUPS_KEY, JSON.stringify(collapsed));
+    } catch {
+      /* bỏ qua */
+    }
+  }, [collapsed]);
 
   // N03 — đồng bộ cross-tab: tab khác ghi kho note → merge theo revision
   // (mới hơn thắng); trùng revision khác nội dung → giữ bản updatedAt mới hơn
@@ -673,24 +702,82 @@ function Workspace() {
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
 
-  const groupMap = new Map<string, { label: string; items: LearningItem[] }>();
-  const chapterById = new Map(SEED_COURSE.chapters.map((c) => [c.id, c]));
-  const lessonTitleById = new Map(
-    SEED_COURSE.chapters.flatMap((c) => c.lessons.map((l) => [l.id, l.title] as const)),
-  );
-  for (const it of visibleItems) {
-    const key =
-      group === "chapter" ? it.chapterId : group === "lesson" ? it.lessonId : "all";
-    const label =
-      group === "chapter"
-        ? (chapterById.get(it.chapterId)?.title ?? it.chapterId)
-        : group === "lesson"
-          ? (lessonTitleById.get(it.lessonId) ?? it.lessonId)
-          : t.notes;
-    if (!groupMap.has(key)) groupMap.set(key, { label, items: [] });
-    groupMap.get(key)!.items.push(it);
+  // Khóa slide = tài liệu + trang/timestamp. Kéo thả chỉ đổi thứ tự hiển thị,
+  // KHÔNG bao giờ sửa chapterId/lessonId/documentId/pageNumber của nguồn.
+  function slideKeyOf(i: LearningItem): string {
+    const at = i.source.pageNumber ?? (i.source.timestampMs !== undefined ? `t${i.source.timestampMs}` : "x");
+    return `${i.partId}::${at}`;
   }
-  const groups = [...groupMap.values()];
+
+  function pageLabelOf(i: LearningItem): string {
+    if (i.source.pageNumber) return `Trang ${i.source.pageNumber}`;
+    if (i.source.timestampMs !== undefined)
+      return new Date(i.source.timestampMs).toISOString().slice(14, 19);
+    return "Chung";
+  }
+
+  const partTitleById = new Map<string, string>();
+  const partOrder = new Map<string, number>();
+  for (const ch of SEED_COURSE.chapters)
+    for (const l of ch.lessons)
+      l.parts.forEach((p, pi) => {
+        partTitleById.set(p.id, p.title);
+        partOrder.set(p.id, pi);
+      });
+
+  interface SlideNode {
+    key: string;
+    docTitle: string;
+    pageLabel: string;
+    items: LearningItem[];
+  }
+  interface LessonNode {
+    id: string;
+    num: string;
+    title: string;
+    slides: SlideNode[];
+  }
+  interface ChapterNode {
+    id: string;
+    num: string;
+    title: string;
+    lessons: LessonNode[];
+  }
+
+  // Cây phân cấp theo thứ tự khóa học (không dùng AI sắp xếp — N01).
+  const tree: ChapterNode[] = SEED_COURSE.chapters
+    .map((ch, ci) => ({
+      id: ch.id,
+      num: `Chương ${ci + 1}`,
+      title: ch.title,
+      lessons: ch.lessons
+        .map((l, li) => {
+          const inLesson = visibleItems.filter((i) => i.lessonId === l.id);
+          const slides = new Map<string, SlideNode>();
+          for (const it of inLesson) {
+            const key = slideKeyOf(it);
+            if (!slides.has(key))
+              slides.set(key, {
+                key,
+                docTitle: partTitleById.get(it.partId) ?? it.partId,
+                pageLabel: pageLabelOf(it),
+                items: [],
+              });
+            slides.get(key)!.items.push(it);
+          }
+          const ordered = [...slides.values()].sort(
+            (a, b) =>
+              (partOrder.get(a.items[0].partId) ?? 99) - (partOrder.get(b.items[0].partId) ?? 99) ||
+              a.pageLabel.localeCompare(b.pageLabel),
+          );
+          return { id: l.id, num: `Bài ${ci + 1}.${li + 1}`, title: l.title, slides: ordered };
+        })
+        .filter((l) => l.slides.length > 0),
+    }))
+    .filter((c) => c.lessons.length > 0);
+
+  // Chế độ phẳng (theo thời gian) giữ nguyên cho người thích xem nhanh.
+  const flatItems = group === "flat" ? visibleItems : [];
 
   const recentlyDeleted = items.filter((i) => i.deletedAt).slice(-3).reverse();
 
@@ -716,8 +803,21 @@ function Workspace() {
 
   // Lưu local prototype: debounce ~600ms. Ghi thực do effect [items] đảm nhiệm
   // (chạy trước khi lật trạng thái), timer chỉ lật Đã lưu sau khi ghi xong.
+  // Lưu local prototype: kiểm tra ghi được TRƯỚC khi đổi state — thất bại thì
+  // báo lỗi ngay, không đổi items (nhất quán, không cần rollback). Debounce
+  // ~600ms cho trạng thái "Đã lưu" (effect [items] ghi mirror sau đó).
   function scheduleAutosave(mut: (prev: LearningItem[]) => LearningItem[]) {
-    setItems(mut);
+    let next: LearningItem[];
+    try {
+      next = mut(itemsRef.current);
+      localStorage.setItem(ITEMS_KEY, JSON.stringify(next));
+    } catch {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      setSaveState("error");
+      setSaveMsg("Lưu thất bại (bộ nhớ đầy/bị chặn) — thứ tự và nội dung giữ nguyên.");
+      return;
+    }
+    setItems(next);
     setSaveState("saving");
     setSaveMsg("Đang lưu…");
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -867,6 +967,14 @@ function Workspace() {
     setActivePartId(it.partId);
     if (it.source.pageNumber) setPage(it.source.pageNumber);
     if (it.source.timestampMs !== undefined) setVideoTs(it.source.timestampMs);
+    // Giữ panel ghi chú + mở sẵn các nhóm chứa note (không reset nhóm/scroll).
+    setCollapsed((p) => {
+      const n = { ...p };
+      delete n[`ch:${it.chapterId}`];
+      delete n[`le:${it.lessonId}`];
+      delete n[`sl:${slideKeyOf(it)}`];
+      return n;
+    });
     writeDeepLink(it);
   }
 
@@ -1436,20 +1544,116 @@ function Workspace() {
     );
   }
 
-  function moveItem(id: string, dir: -1 | 1) {
-    const order = visibleItems.map((i) => i.id);
-    const idx = order.indexOf(id);
-    const j = idx + dir;
-    if (idx < 0 || j < 0 || j >= order.length) return;
-    const a = visibleItems[idx];
-    const b = visibleItems[j];
+  // Chưa hiểu là trạng thái người học chọn; KHÔNG tự bỏ sau câu trả lời AI.
+  // Đồng bộ slide/panel vì cùng itemId + status trong một nguồn dữ liệu.
+  function toggleUnresolved(it: LearningItem) {
+    scheduleAutosave((prev) =>
+      prev.map((p) =>
+        p.id === it.id
+          ? {
+              ...p,
+              status: p.status === "unresolved" ? "normal" : "unresolved",
+              updatedAt: new Date().toISOString(),
+            }
+          : p,
+      ),
+    );
+  }
+
+  // Ghi thứ tự mới BẰNG HOÁN VỊ các sortOrder đang có của nhóm (không sinh giá
+  // trị mới, không tạo bản sao, không đụng chapterId/lessonId/pageNumber).
+  function commitOrder(orderedIds: string[]) {
+    const now = new Date().toISOString();
+    const cur = itemsRef.current
+      .filter((i) => orderedIds.includes(i.id))
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
+    if (cur.length !== orderedIds.length) return;
+    const vals = cur.map((i) => i.sortOrder);
     scheduleAutosave((prev) =>
       prev.map((i) => {
-        if (i.id === a.id) return { ...i, sortOrder: b.sortOrder };
-        if (i.id === b.id) return { ...i, sortOrder: a.sortOrder };
-        return i;
+        const k = orderedIds.indexOf(i.id);
+        return k < 0 ? i : { ...i, sortOrder: vals[k], updatedAt: now };
       }),
     );
+  }
+
+  // Di chuyển bằng nút ↑/↓ (bàn phím + mobile): chỉ trong cùng slide.
+  function reorderSwap(id: string, dir: -1 | 1) {
+    const it = itemsRef.current.find((i) => i.id === id);
+    if (!it) return;
+    const key = slideKeyOf(it);
+    const grp = itemsRef.current
+      .filter((i) => !i.deletedAt && slideKeyOf(i) === key)
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
+    const idx = grp.findIndex((i) => i.id === id);
+    const j = idx + dir;
+    if (idx < 0 || j < 0 || j >= grp.length) {
+      setSaveMsg("Đã ở đầu/cuối nhóm slide.");
+      return;
+    }
+    const ids = grp.map((i) => i.id);
+    [ids[idx], ids[j]] = [ids[j], ids[idx]];
+    commitOrder(ids);
+    setSaveMsg(`Đã chuyển “${it.title ?? "ghi chú"}” ${dir < 0 ? "lên" : "xuống"} trong slide — reload vẫn giữ.`);
+  }
+
+  // Kéo thả: id đang kéo thuộc nhóm nào thì chỉ được thả trong nhóm đó.
+  function onDragStartNote(e: React.DragEvent, it: LearningItem) {
+    setDragId(it.id);
+    setDragGroup(slideKeyOf(it));
+    setDropBefore(null);
+    e.dataTransfer.setData("text/plain", it.id);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function groupIdsOf(key: string): string[] {
+    return itemsRef.current
+      .filter((i) => !i.deletedAt && slideKeyOf(i) === key)
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt))
+      .map((i) => i.id);
+  }
+
+  function autoScrollNotes(clientY: number) {
+    const el = notesScrollRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (clientY < r.top + 56) el.scrollTop -= 14;
+    else if (clientY > r.bottom - 56) el.scrollTop += 14;
+  }
+
+  function onDragOverNote(e: React.DragEvent, it: LearningItem) {
+    if (!dragId || !dragGroup || dragGroup !== slideKeyOf(it) || it.id === dragId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const after = e.clientY - rect.top > rect.height / 2;
+    if (after) {
+      const ids = groupIdsOf(dragGroup).filter((x) => x !== dragId);
+      const k = ids.indexOf(it.id);
+      setDropBefore(k >= 0 && k + 1 < ids.length ? ids[k + 1] : null);
+    } else {
+      setDropBefore(it.id);
+    }
+    autoScrollNotes(e.clientY);
+  }
+
+  function onDropNote(e: React.DragEvent) {
+    if (!dragId || !dragGroup) return;
+    e.preventDefault();
+    const ids = groupIdsOf(dragGroup).filter((x) => x !== dragId);
+    const k = dropBefore ? ids.indexOf(dropBefore) : ids.length;
+    const ordered = [...ids.slice(0, k < 0 ? ids.length : k), dragId, ...ids.slice(k < 0 ? ids.length : k)];
+    commitOrder(ordered);
+    setSaveMsg("Đã đổi thứ tự trong slide — reload vẫn giữ, nguồn không đổi.");
+    setDragId(null);
+    setDragGroup(null);
+    setDropBefore(null);
+  }
+
+  function endDrag() {
+    setDragId(null);
+    setDragGroup(null);
+    setDropBefore(null);
   }
 
   function addComment() {
@@ -1607,11 +1811,226 @@ function Workspace() {
           ? "#b42318"
           : "#6b7280";
 
+  // Một bài trong cây: heading Bài → các Slide (trang + tên tài liệu) → notes.
+  function renderLesson(l: LessonNode) {
+    const lk = `le:${l.id}`;
+    const count = l.slides.reduce((n, s) => n + s.items.length, 0);
+    return (
+      <section key={lk}>
+        {groupHead(lk, 2, l.num, l.title, count)}
+        {!collapsed[lk] &&
+          l.slides.map((s) => {
+            const sk = `sl:${s.key}`;
+            return (
+              <section key={sk}>
+                {groupHead(sk, 3, `Slide ${s.pageLabel}`, s.docTitle, s.items.length)}
+                {!collapsed[sk] && s.items.map((it) => renderNote(it, s.key))}
+              </section>
+            );
+          })}
+      </section>
+    );
+  }
+
+  // Heading nhóm phân cấp: số thứ tự + tên + số lượng + thu gọn (không chỉ màu).
+  function groupHead(key: string, level: 1 | 2 | 3, num: string, title: string, count: number) {
+    const shut = !!collapsed[key];
+    return (
+      <button
+        onClick={() => setCollapsed((p) => ({ ...p, [key]: !p[key] }))}
+        aria-expanded={!shut}
+        aria-label={`${shut ? "Mở" : "Thu gọn"} ${num} ${title}`}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          textAlign: "left",
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "4px 0",
+          marginLeft: level === 1 ? 0 : level === 2 ? 12 : 24,
+          fontSize: level === 1 ? 14 : level === 2 ? 13.5 : 13,
+          fontWeight: level === 3 ? 600 : 700,
+          color: dark ? TOK.inkDark : TOK.ink,
+        }}
+      >
+        <span aria-hidden="true" style={{ color: TOK.primary, fontWeight: 700 }}>{shut ? "▸" : "▾"}</span>
+        <span>{num} — {title}</span>
+        <span style={{ fontSize: 12, fontWeight: 400, opacity: 0.7 }}>({count} ghi chú)</span>
+      </button>
+    );
+  }
+
+  // Vạch báo vị trí chèn khi kéo (màu accent + nhãn chữ, không chỉ màu).
+  function dropBar() {    return (
+      <div
+        aria-hidden="true"
+        style={{
+          height: 6,
+          borderRadius: 3,
+          background: TOK.accent,
+          border: `1px dashed ${TOK.primary}`,
+          marginBottom: 6,
+        }}
+      />
+    );
+  }
+
+  // Card ghi chú: drag handle riêng (kéo) + nút ↑/↓ (bàn phím/mobile) + badge
+  // Chưa hiểu (icon + nhãn, luôn hiện kể cả hover/kéo).
+  function renderNote(it: LearningItem, skey: string) {
+    const un = it.status === "unresolved";
+    const dragging = dragId === it.id;
+    const showBarBefore = dragGroup === skey && dropBefore === it.id && !dragging;
+    return (
+      <div key={it.id}>
+        {showBarBefore && dropBar()}
+        <article
+          onDragOver={(e) => onDragOverNote(e, it)}
+          onDrop={onDropNote}
+          style={{
+            ...(un ? unresolvedCard(dark) : normalCard(dark)),
+            ...(dragging ? { opacity: 0.55 } : {}),
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <span
+              draggable
+              onDragStart={(e) => onDragStartNote(e, it)}
+              onDragEnd={endDrag}
+              role="button"
+              tabIndex={0}
+              title="Kéo để sắp xếp trong slide"
+              aria-label={`Kéo để sắp xếp: ${it.title ?? it.id}`}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowUp") reorderSwap(it.id, -1);
+                if (e.key === "ArrowDown") reorderSwap(it.id, 1);
+              }}
+              style={{
+                cursor: "grab",
+                padding: "2px 6px",
+                borderRadius: 6,
+                border: `1px solid ${dark ? TOK.borderDark : TOK.border}`,
+                color: dark ? TOK.inkDark : TOK.ink,
+                fontSize: 14,
+                lineHeight: 1.4,
+                userSelect: "none",
+              }}
+            >
+              ⠿
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                {KIND_LABEL[it.kind]} ·{" "}
+                {it.source.pageNumber ? `trang ${it.source.pageNumber}` : ""}
+                {it.source.timestampMs !== undefined
+                  ? ` · ${new Date(it.source.timestampMs).toISOString().slice(14, 19)}`
+                  : ""}{" "}
+                · {it.status === "resolved" ? "Đã hiểu" : ""}
+                {" · "}{fmtTime(it.updatedAt)}
+              </div>
+              {un && (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: TOK.unresolvedInk,
+                    background: TOK.unresolved,
+                    borderRadius: 6,
+                    padding: "1px 8px",
+                    marginTop: 4,
+                  }}
+                >
+                  <span aria-hidden="true">⚠</span> Chưa hiểu
+                </div>
+              )}
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{it.title}</div>
+              {it.quote && (
+                <blockquote style={{ fontSize: 13, margin: "4px 0", opacity: 0.9 }}>
+                  “{it.quote}”
+                </blockquote>
+              )}
+              {it.assetUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={it.assetUrl} alt={it.title ?? "Ảnh ghi chú"} style={{ maxWidth: "100%", borderRadius: 6 }} />
+              )}
+              {editingId === it.id ? (
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <input
+                    value={editBody}
+                    onChange={(e) => setEditBody(e.target.value)}
+                    aria-label="Sửa ghi chú"
+                    style={{ ...input(dark), flex: 1 }}
+                  />
+                  <button onClick={saveEdit} style={btn(dark)}>{t.save}</button>
+                  <button onClick={() => setEditingId(null)} style={btn(dark)}>Hủy</button>
+                </div>
+              ) : (
+                <p style={{ fontSize: 14, margin: "4px 0" }}>{it.body}</p>
+              )}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button onClick={() => openSource(it)} style={btnPrimary()}>{t.openSource}</button>
+                {it.ownerId === CURRENT_USER_ID && editingId !== it.id && (
+                  <button onClick={() => startEdit(it)} style={btn(dark)}>Sửa</button>
+                )}
+                {it.ownerId === CURRENT_USER_ID && (
+                  <button onClick={() => softDelete(it.id)} style={btn(dark)}>Xóa</button>
+                )}
+                {it.ownerId === CURRENT_USER_ID && (
+                  <button
+                    onClick={() => toggleUnresolved(it)}
+                    aria-pressed={un}
+                    title={un ? "Đang đánh dấu chưa hiểu" : "Đánh dấu chưa hiểu"}
+                    style={
+                      un
+                        ? {
+                            ...btn(dark),
+                            background: TOK.unresolved,
+                            borderColor: TOK.unresolved,
+                            color: TOK.unresolvedInk,
+                            fontWeight: 700,
+                          }
+                        : btn(dark)
+                    }
+                  >
+                    {un ? "✓ Chưa hiểu" : "Chưa hiểu"}
+                  </button>
+                )}
+                <button
+                  onClick={() => reorderSwap(it.id, -1)}
+                  title="Di chuyển lên (focus vào tay cầm rồi bấm ↑/↓)"
+                  aria-label={`Di chuyển lên: ${it.title ?? it.id}`}
+                  style={btn(dark)}
+                >
+                  ↑
+                </button>
+                <button
+                  onClick={() => reorderSwap(it.id, 1)}
+                  title="Di chuyển xuống"
+                  aria-label={`Di chuyển xuống: ${it.title ?? it.id}`}
+                  style={btn(dark)}
+                >
+                  ↓
+                </button>
+              </div>
+            </div>
+          </div>
+        </article>
+        {dragGroup === skey && dropBefore === null && dragId && !dragging && dropBar()}
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: dark ? "#0f1720" : "#F4F7FA",
+        background: dark ? "#0f1720" : TOK.bg,
         color: dark ? "#e6edf3" : "#203246",
         fontSize: 15,
       }}
@@ -1632,7 +2051,7 @@ function Workspace() {
             : { height: 60, padding: "0 16px" }),
         }}
       >
-        <strong style={{ color: dark ? "#fff" : "#18558B" }}>{t.app}</strong>
+        <strong style={{ color: dark ? "#fff" : TOK.primary }}>{t.app}</strong>
         {aiMode === "mock" && (
           <span
             title="AI chạy chế độ demo mô phỏng — tương tác đủ nhưng chưa gọi provider thật"
@@ -1769,7 +2188,7 @@ function Workspace() {
                         width: "100%",
                         textAlign: "left",
                         fontWeight: l.id === activeLessonId ? 700 : 400,
-                        borderColor: l.id === activeLessonId ? "#18558B" : undefined,
+                        borderColor: l.id === activeLessonId ? TOK.primary : undefined,
                       }}
                     >
                       {l.id === activeLessonId ? "▶ " : ""}{l.title}
@@ -1818,7 +2237,7 @@ function Workspace() {
 
           {activePart.kind === "pdf" && (
             <PdfReader
-              key={activePart.id}
+              key={activePart.assetUrl ?? activePart.id}
               url={activePart.assetUrl ?? SAMPLE_PDF_URL}
               page={page}
               onPageChange={setPage}
@@ -2058,7 +2477,17 @@ function Workspace() {
                   key={k}
                   onClick={() => setTab(k)}
                   aria-pressed={tab === k}
-                  style={{ ...btn(dark), fontWeight: tab === k ? 700 : 400 }}
+                  style={{
+                    ...btn(dark),
+                    fontWeight: tab === k ? 700 : 400,
+                    borderColor: tab === k ? TOK.primary : undefined,
+                    background:
+                      tab === k
+                        ? dark
+                          ? TOK.primarySoftDark
+                          : TOK.primarySoft
+                        : btn(dark).background,
+                  }}
                 >
                   {k === "notes" ? t.notes : k === "ai" ? t.ai : k === "docs" ? t.docs : t.support}
                 </button>
@@ -2146,7 +2575,7 @@ function Workspace() {
                 {draftOpen && (
                   <div
                     style={{
-                      border: `1px solid #18558B`,
+                      border: `1px solid ${TOK.primary}`,
                       borderRadius: 8,
                       padding: 8,
                     }}
@@ -2185,7 +2614,7 @@ function Workspace() {
                       style={{ ...input(dark), width: "100%", marginTop: 6 }}
                     />
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      <button onClick={() => requestSummary(false)} disabled={sumBusy} style={btn(dark)}>
+                      <button onClick={() => requestSummary(false)} disabled={sumBusy} style={sumBusy ? btn(dark) : btnPrimary()}>
                         {sumBusy ? "Đang tổng hợp…" : "Gọi AI tổng hợp"}
                       </button>
                       {sumErr && (
@@ -2224,7 +2653,7 @@ function Workspace() {
                       style={{ ...input(dark), width: "100%", marginTop: 6 }}
                     />
                     <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                      <button onClick={() => saveDraft("accepted")} style={btn(dark)}>Duyệt & lưu</button>
+                      <button onClick={() => saveDraft("accepted")} style={btnPrimary()}>Duyệt & lưu</button>
                       <button onClick={() => saveDraft("pending")} style={btn(dark)}>
                         Để sau
                       </button>
@@ -2263,7 +2692,7 @@ function Workspace() {
                   </details>
                 )}
                 {mmOpen && (
-                  <div style={{ border: `1px solid #18558B`, borderRadius: 8, padding: 8 }}>
+                  <div style={{ border: `1px solid ${TOK.primary}`, borderRadius: 8, padding: 8 }}>
                     <strong style={{ fontSize: 13 }}>Chuẩn hóa sơ đồ (mindmap)</strong>
                     <div style={{ fontSize: 12, opacity: 0.8 }}>
                       Chế độ demo mô phỏng: sơ đồ dựng từ dữ liệu mẫu, có nhãn mô phỏng — không tuyên
@@ -2311,7 +2740,7 @@ function Workspace() {
                         <button
                           onClick={() => saveMindmap("accepted")}
                           disabled={mmProposal.uncertainties.filter((_, i) => !mmConfirmed[i]).length > 0}
-                          style={btn(dark)}
+                          style={mmProposal.uncertainties.filter((_, i) => !mmConfirmed[i]).length > 0 ? btn(dark) : btnPrimary()}
                           title="Chỉ active sau khi xác nhận mọi điểm chưa rõ"
                         >
                           Duyệt & lưu ({mmProposal.uncertainties.filter((_, i) => !mmConfirmed[i]).length} điểm cần xác nhận)
@@ -2359,86 +2788,38 @@ function Workspace() {
                 {visibleItems.length === 0 && (
                   <p style={{ fontSize: 13 }}>Không tìm thấy ghi chú (empty state thật).</p>
                 )}
-                {groups.map((g) => (
-                  <section key={g.label}>
-                    <h3 style={{ fontSize: 13, margin: "8px 0 4px" }}>{g.label}</h3>
-                    {g.items.map((it) => (
-                      <article
-                        key={it.id}
-                        style={{
-                          border: `1px solid ${dark ? "#2a3644" : "#DCE5ED"}`,
-                          borderRadius: 8,
-                          padding: 8,
-                          marginBottom: 6,
-                        }}
-                      >
-                        <div style={{ fontSize: 12, opacity: 0.8 }}>
-                          {KIND_LABEL[it.kind]} ·{" "}
-                          {it.source.pageNumber ? `trang ${it.source.pageNumber}` : ""}
-                          {it.source.timestampMs !== undefined
-                            ? ` · ${new Date(it.source.timestampMs).toISOString().slice(14, 19)}`
-                            : ""}{" "}
-                          · {it.status === "unresolved" ? "Chưa hiểu" : it.status === "resolved" ? "Đã hiểu" : ""}
-                          {" · "}{fmtTime(it.updatedAt)}
-                        </div>
-                        <div style={{ fontSize: 14, fontWeight: 600 }}>{it.title}</div>
-                        {it.quote && (
-                          <blockquote style={{ fontSize: 13, margin: "4px 0", opacity: 0.9 }}>
-                            “{it.quote}”
-                          </blockquote>
-                        )}
-                        {it.assetUrl && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={it.assetUrl} alt={it.title ?? "Ảnh ghi chú"} style={{ maxWidth: "100%", borderRadius: 6 }} />
-                        )}
-                        {editingId === it.id ? (
-                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                            <input
-                              value={editBody}
-                              onChange={(e) => setEditBody(e.target.value)}
-                              aria-label="Sửa ghi chú"
-                              style={{ ...input(dark), flex: 1 }}
-                            />
-                            <button onClick={saveEdit} style={btn(dark)}>{t.save}</button>
-                            <button onClick={() => setEditingId(null)} style={btn(dark)}>Hủy</button>
-                          </div>
-                        ) : (
-                          <p style={{ fontSize: 14, margin: "4px 0" }}>{it.body}</p>
-                        )}
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <button onClick={() => openSource(it)} style={btn(dark)}>{t.openSource}</button>
-                          {it.ownerId === CURRENT_USER_ID && editingId !== it.id && (
-                            <button onClick={() => startEdit(it)} style={btn(dark)}>Sửa</button>
-                          )}
-                          {it.ownerId === CURRENT_USER_ID && (
-                            <button onClick={() => softDelete(it.id)} style={btn(dark)}>Xóa</button>
-                          )}
-                          {it.ownerId === CURRENT_USER_ID && (
-                            <button
-                              onClick={() =>
-                                scheduleAutosave((prev) =>
-                                  prev.map((p) =>
-                                    p.id === it.id
-                                      ? {
-                                          ...p,
-                                          status:
-                                            p.status === "unresolved" ? "normal" : "unresolved",
-                                          updatedAt: new Date().toISOString(),
-                                        }
-                                      : p,
-                                  ),
-                                )
-                              }
-                              style={btn(dark)}
-                            >
-                              {it.status === "unresolved" ? "Bỏ đánh dấu" : "Chưa hiểu"}
-                            </button>
-                          )}
-                        </div>
-                      </article>
-                    ))}
-                  </section>
-                ))}
+                <div
+                  ref={notesScrollRef}
+                  aria-label="Danh sách ghi chú"
+                  style={{ overflowY: "auto", maxHeight: "calc(100vh - 280px)", paddingRight: 2 }}
+                >
+                  {group === "flat"
+                    ? flatItems.map((it) => renderNote(it, slideKeyOf(it)))
+                    : (group === "chapter" ? tree : tree.flatMap((c) => c.lessons.map((l) => ({ ...l, chId: c.id })))).map(
+                      (node) => {
+                        const isCh = "lessons" in node;
+                        if (isCh) {
+                          const c = node as ChapterNode;
+                          const count = c.lessons.reduce(
+                            (n, l) => n + l.slides.reduce((m, s) => m + s.items.length, 0),
+                            0,
+                          );
+                          const ck = `ch:${c.id}`;
+                          return (
+                            <section key={ck}>
+                              {groupHead(ck, 1, c.num, c.title, count)}
+                              {!collapsed[ck] &&
+                                c.lessons.map((l) => (
+                                  <div key={l.id}>{renderLesson(l)}</div>
+                                ))}
+                            </section>
+                          );
+                        }
+                        const l = node as LessonNode;
+                        return <div key={l.id}>{renderLesson(l)}</div>;
+                      },
+                    )}
+                </div>
                 {recentlyDeleted.length > 0 && (
                   <div style={{ fontSize: 12 }}>
                     Đã xóa gần đây:{" "}
@@ -2464,7 +2845,7 @@ function Workspace() {
                   <div
                     style={{
                       fontSize: 12,
-                      border: `1px solid #18558B`,
+                      border: `1px solid ${TOK.primary}`,
                       borderRadius: 8,
                       padding: 8,
                     }}
@@ -2495,7 +2876,7 @@ function Workspace() {
                           style={{ ...input(dark), width: "100%", marginTop: 6 }}
                         />
                         <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                          <button onClick={() => sendVision(false)} disabled={visBusy} style={btn(dark)}>
+                          <button onClick={() => sendVision(false)} disabled={visBusy} style={visBusy ? btn(dark) : btnPrimary()}>
                             {visBusy ? "Đang hỏi…" : "Gửi vùng + câu hỏi"}
                           </button>
                           {visErr && (
@@ -2654,7 +3035,7 @@ function Workspace() {
                   <button
                     onClick={() => sendAi()}
                     disabled={aiBusy || streaming}
-                    style={btn(dark)}
+                    style={aiBusy || streaming ? btn(dark) : btnPrimary()}
                   >
                     {t.send}
                   </button>
@@ -2888,7 +3269,7 @@ function MindmapEditor(props: {
                 y1={a.cy}
                 x2={b.cx}
                 y2={b.cy}
-                stroke={e.uncertain ? "#b45309" : "#18558B"}
+                stroke={e.uncertain ? "#b45309" : TOK.primary}
                 strokeDasharray={e.uncertain ? "5 4" : undefined}
                 strokeWidth={1.5}
               />
@@ -2907,7 +3288,7 @@ function MindmapEditor(props: {
                   height={NH}
                   rx={8}
                   fill={n.uncertain ? (dark ? "#3a2c10" : "#FEF3C7") : dark ? "#1d2a36" : "#FFFFFF"}
-                  stroke={isSel ? "#dc2626" : "#18558B"}
+                  stroke={isSel ? "#dc2626" : TOK.primary}
                   strokeWidth={isSel ? 2.5 : 1.5}
                 />
                 <text x={p.cx} y={p.cy - 2} textAnchor="middle" fontSize={11} fill={dark ? "#e6edf3" : "#203246"}>
@@ -3003,6 +3384,21 @@ function btn(dark: boolean): React.CSSProperties {
     border: `1px solid ${dark ? "#3b4c5e" : "#DCE5ED"}`,
     background: dark ? "#1d2a36" : "#FFFFFF",
     color: dark ? "#e6edf3" : "#203246",
+    cursor: "pointer",
+  };
+}
+
+// Nút chính: nền Primary #187CFA + chữ trắng semibold ≥13px (tương phản ~4.0,
+// chỉ dùng cho nút hành động chính, không dùng chữ trắng thường trên nền màu).
+function btnPrimary(): React.CSSProperties {
+  return {
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "6px 10px",
+    borderRadius: 8,
+    border: `1px solid ${TOK.primary}`,
+    background: TOK.primary,
+    color: "#FFFFFF",
     cursor: "pointer",
   };
 }
