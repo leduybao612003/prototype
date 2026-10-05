@@ -125,6 +125,7 @@ theo id (không ghi đè), `pendingSync` + nút Gửi lại, badge Chưa đọc,
 | S-LIVE | Server thật 2 phiên: coach thấy Chưa đọc → trả lời → learner thấy + Chưa đọc | PASS | unread 2 chiều, reply qua requestId chung |
 | S-DEDUPE | POST/reply trùng clientId qua API | PASS | request deduped:true cùng id; replies=1 |
 | S-ERR | pageerror | PASS | 0 |
+| S-PROD | Production sau push `5876b0b`: support + health | PASS | `/api/support` → 503 STORE_UNAVAILABLE trung thực (VERCEL gate, không 200-[] giả gây wipe); `/api/health` 200 `aiMode:mock`. Flow learner–coach trên production: local + banner, chờ Supabase để chia sẻ (BLOCKED, đã ghi) |
 
 ## E2E hồi quy nguồn note (Chrome thật, port 3118, build production)
 
