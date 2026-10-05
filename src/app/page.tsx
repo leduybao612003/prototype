@@ -224,6 +224,7 @@ function Workspace() {
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveMsg, setSaveMsg] = useState("Dữ liệu mẫu đã sẵn sàng.");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [histOpen, setHistOpen] = useState<Record<string, boolean>>({});
   const [editBody, setEditBody] = useState("");
   const [newNote, setNewNote] = useState("");
   const [aiScope, setAiScope] = useState<"page" | "lesson" | "selection">("page");
@@ -992,25 +993,57 @@ function Workspace() {
 
   function startEdit(it: LearningItem) {
     setEditingId(it.id);
-    setEditBody(it.body ?? "");
+    // Note highlight/region: ô sửa điền sẵn text đã lưu; nếu body trống thì
+    // điền text được tô sáng (quote) để người học thấy và sửa tiếp.
+    setEditBody(it.body || it.quote || "");
   }
 
   function saveEdit() {
     if (!editingId) return;
     scheduleAutosave((prev) =>
-      prev.map((i) =>
-        i.id === editingId
-          ? {
-              ...i,
-              body: editBody,
-              revision: i.revision + 1,
-              updatedAt: new Date().toISOString(),
-              clientOperationId: newClientOperationId(),
-            }
-          : i,
-      ),
+      prev.map((i) => {
+        if (i.id !== editingId) return i;
+        // Giữ bản trước khi sửa vào lịch sử (tối đa 5, mới nhất trước đó giữ).
+        const snap = {
+          title: i.title,
+          body: i.body,
+          updatedAt: i.updatedAt,
+          revision: i.revision,
+        };
+        const history = [snap, ...(i.history ?? [])].slice(0, 5);
+        return {
+          ...i,
+          body: editBody,
+          history,
+          revision: i.revision + 1,
+          updatedAt: new Date().toISOString(),
+          clientOperationId: newClientOperationId(),
+        };
+      }),
     );
     setEditingId(null);
+  }
+
+  // Khôi phục một bản cũ: bản hiện tại được đẩy vào lịch sử trước (không mất).
+  function restoreVersion(it: LearningItem, rev: number) {
+    scheduleAutosave((prev) =>
+      prev.map((i) => {
+        if (i.id !== it.id) return i;
+        const target = (i.history ?? []).find((h) => h.revision === rev);
+        if (!target) return i;
+        const snap = { title: i.title, body: i.body, updatedAt: i.updatedAt, revision: i.revision };
+        return {
+          ...i,
+          title: target.title,
+          body: target.body,
+          history: [snap, ...(i.history ?? [])].slice(0, 5),
+          revision: i.revision + 1,
+          updatedAt: new Date().toISOString(),
+          clientOperationId: newClientOperationId(),
+        };
+      }),
+    );
+    setSaveMsg(`Đã khôi phục bản revision ${rev} (bản hiện tại đã lưu vào lịch sử).`);
   }
 
   const myId = role === "coach" ? "coach-1" : CURRENT_USER_ID;
@@ -1960,15 +1993,22 @@ function Workspace() {
                 <img src={it.assetUrl} alt={it.title ?? "Ảnh ghi chú"} style={{ maxWidth: "100%", borderRadius: 6 }} />
               )}
               {editingId === it.id ? (
-                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                  <input
-                    value={editBody}
-                    onChange={(e) => setEditBody(e.target.value)}
-                    aria-label="Sửa ghi chú"
-                    style={{ ...input(dark), flex: 1 }}
-                  />
-                  <button onClick={saveEdit} style={btn(dark)}>{t.save}</button>
-                  <button onClick={() => setEditingId(null)} style={btn(dark)}>Hủy</button>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {it.quote && (
+                    <blockquote style={{ fontSize: 12, margin: 0, opacity: 0.85 }}>
+                      Text tô sáng gốc (giữ nguyên làm ngữ cảnh): “{it.quote}”
+                    </blockquote>
+                  )}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      value={editBody}
+                      onChange={(e) => setEditBody(e.target.value)}
+                      aria-label="Sửa ghi chú"
+                      style={{ ...input(dark), flex: 1 }}
+                    />
+                    <button onClick={saveEdit} style={btn(dark)}>{t.save}</button>
+                    <button onClick={() => setEditingId(null)} style={btn(dark)}>Hủy</button>
+                  </div>
                 </div>
               ) : (
                 <p style={{ fontSize: 14, margin: "4px 0" }}>{it.body}</p>
@@ -2018,6 +2058,42 @@ function Workspace() {
                   ↓
                 </button>
               </div>
+              {(it.history ?? []).length > 0 && (
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  <button
+                    onClick={() => setHistOpen((p) => ({ ...p, [it.id]: !p[it.id] }))}
+                    aria-expanded={!!histOpen[it.id]}
+                    style={{ ...btn(dark), fontSize: 12 }}
+                  >
+                    {histOpen[it.id] ? "▾" : "▸"} Lịch sử ({(it.history ?? []).length})
+                  </button>
+                  {histOpen[it.id] &&
+                    (it.history ?? []).map((h) => (
+                      <div
+                        key={h.revision}
+                        style={{
+                          marginTop: 4,
+                          padding: 6,
+                          borderRadius: 6,
+                          border: `1px dashed ${dark ? TOK.borderDark : TOK.border}`,
+                          opacity: 0.95,
+                        }}
+                      >
+                        <div style={{ opacity: 0.75 }}>
+                          Bản revision {h.revision} · {fmtTime(h.updatedAt)}
+                        </div>
+                        {h.title && <div style={{ fontWeight: 600 }}>{h.title}</div>}
+                        <div>{h.body || "(trống)"}</div>
+                        <button
+                          onClick={() => restoreVersion(it, h.revision)}
+                          style={{ ...btn(dark), fontSize: 12, marginTop: 4 }}
+                        >
+                          Khôi phục bản này
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           </div>
         </article>

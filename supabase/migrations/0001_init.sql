@@ -14,6 +14,7 @@ create table if not exists learning_items (
   title text,
   body text,
   quote text,
+  history jsonb not null default '[]',
   asset_id text,
   vector_data jsonb,
   status text not null default 'normal' check (status in ('normal','unresolved','resolved')),

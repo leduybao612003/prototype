@@ -72,6 +72,19 @@ Script 1 lần (không commit). Screenshots: `ui-before.png` (phân cấp + hand
 | UI-05b | Mobile 390px | PASS | drawer + panel truy cập được |
 | UI-CONSOLE | pageerror suốt e2e UI | PASS | 0 |
 | BUG-deep-link | Reload ở URL `/learn/...` (do Mở nguồn ghi) → 404, không canvas | FIXED | thêm route `learn/[courseId]/[lessonId]` redirect giữ params; e2e reload deep URL PASS |
+
+## E2E sửa highlight + lịch sử phiên bản (Chrome thật, port 3116, build production)
+
+Bug người dùng báo: Sửa note từ “Tô sáng” mở ô trống (body) thay vì text tô
+sáng; sửa xong không xem được bản cũ. Fix: ô sửa điền sẵn body || quote +
+hiện quote gốc; mỗi lần sửa đẩy bản cũ vào `history` (tối đa 5) + nút Khôi phục.
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| FIX-01 | Sửa note highlight seed | PASS | input điền sẵn quote, có dòng “Text tô sáng gốc”; fix-edit-prefill.png |
+| FIX-02 | Sửa 2 lần liên tiếp | PASS | nút “Lịch sử (2)” |
+| FIX-03 | Mở lịch sử → reload → khôi phục bản cũ | PASS | thấy “Diễn giải lần 1”, reload còn, khôi phục về được; fix-history.png |
+| FIX-CONSOLE | pageerror | PASS | 0 |
 | T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 

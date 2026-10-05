@@ -30,7 +30,9 @@ export interface LearningItem {
   title?: string;
   body?: string;
   quote?: string;
-  assetId?: string;
+  // Lịch sử các bản trước khi sửa (mới nhất trước, tối đa 5) — để người học
+  // xem lại bản cũ sau khi chỉnh sửa. Bản hiện tại luôn là title/body gốc.
+  history?: { title?: string; body?: string; updatedAt: string; revision: number }[];  assetId?: string;
   assetUrl?: string;
   vectorData?: unknown;
   status: ItemStatus;
