@@ -55,6 +55,7 @@ screenshots trong thư mục temp phiên chạy). Fresh profile → localStorage
 | M-E2E-04 | Khoanh vùng → panel AI + crop thật → hỏi → đáp mock | PASS — MOCK | crop hiển thị thật; answer `[MÔ PHỎNG vision — chưa đọc chữ trong ảnh]`; e2e-vision.png |
 | CONSOLE | pageerror trong suốt e2e | PASS | 0 pageerror |
 | RWD-01 | Viewport mobile 390×844: drawer mục lục + tab AI truy cập được | PASS | outline=1, aiTab=2, 0 pageerror; e2e-mobile.png |
+| T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 
 ## T22–T29 mapping

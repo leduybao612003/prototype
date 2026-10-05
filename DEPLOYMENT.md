@@ -1,6 +1,11 @@
 # DEPLOYMENT — VLearn Prototype
 
-Trạng thái: **chưa deploy** (Giai đoạn G). Quy trình khi được cấp quyền (§8-G):
+Trạng thái: **đã deploy preview/production 05/10/2026** —
+URL: `https://prototype-wine-one.vercel.app/`
+(env `AI_MODE=mock`; repo `leduybao612003/prototype`, commit `268450c`).
+T34 PASS: `/` render đủ; 4 API AI 200 `mode:mock` với KB ingested.
+
+Giữ quy trình Giai đoạn G cho lần deploy sau (§8-G):
 
 1. Commit source/migrations/lockfile, quét secret (`git status`, không commit `.env.local`).
 2. Chủ dự án cung cấp Vercel project, Supabase, tài khoản thử, API credential, assets.
