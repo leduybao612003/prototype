@@ -44,11 +44,9 @@ Khi có: đặt `AI_MODE=live`, deploy lại, chạy lại T22–T29 live. Code 
 
 - F01 Auth + persistence server (T01/T13–T15): BLOCKED — cần Supabase URL/key
   (migration + RLS đã viết sẵn trong `supabase/migrations/0001_init.sql`).
+  Riêng luồng hỗ trợ đã có backend file dùng chung 2 phiên (e2e F-SUP),
+  nhưng Vercel ephemeral → production vẫn cần Supabase.
 - Video/transcript asset thật (F21–F23, T16–T17): BLOCKED — cần asset được phép dùng.
 - Deploy Vercel: ĐÃ DEPLOY (`https://prototype-wine-one.vercel.app/`, T34 PASS).
-  Lần này push tiếp để cập nhật UI mới.
-- UI 05/10/2026 (đợt 2): tokens `#187CFA/#7DF3FF/#F2F8FF/#F5822B` (`src/lib/theme.ts`,
-  tương phản đã rà), cây Chương→Bài→Slide collapsible, kéo thả + ↑/↓ trong slide
-  (hoán vị sortOrder, không sửa nguồn), card Chưa hiểu cam + badge icon/nhãn
-  đồng bộ slide/panel, deep-link `/learn/...` hết 404 — e2e UI 8/8 PASS.
-- Nợ code còn lại: tách `page.tsx` (~3400 dòng), 3 unused vars, React Bits component.
+  Đợt này push tiếp: reader Cuộn dọc + routing khoanh + support server.
+- Nợ code còn lại: tách `page.tsx`, 3 unused vars, React Bits component.

@@ -39,6 +39,8 @@ yarn-error.log*
 # prototype KB: giữ chunks + status để checkout mới có KB sẵn,
 # bỏ qua bản PDF gốc đã upload (trùng với public/sample.pdf)
 data/uploads/
+# runtime hỗ trợ learner-coach (ghi lúc chạy, không commit; Vercel ephemeral)
+data/support.json
 
 # typescript
 *.tsbuildinfo

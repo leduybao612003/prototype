@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import PdfReader, { type AnnotationPayload } from "@/components/PdfReader";
+import PdfReader, {
+  type AnnotationPayload,
+  type ReaderView,
+  type RegionCrop,
+  type RegionDest,
+} from "@/components/PdfReader";
 import {
   CURRENT_USER_ID,
   LESSON_START_PAGE,
@@ -102,6 +107,7 @@ interface KbStatus {
   updatedAt: string;
   error?: string;
   deduped?: boolean;
+  sha256?: string;
 }
 
 const STR: Record<Lang, Record<string, string>> = {
@@ -179,9 +185,31 @@ interface SupportRequest {
   status: "moi" | "dang_xu_ly" | "da_tra_loi";
   replies: SupportReply[];
   createdAt: string;
+  crop?: string;
+  noteId?: string;
 }
 
 const CLASSES = ["Lớp AI20k-01", "Lớp AI20k-02"];
+
+// Nguồn vùng khoanh đã chốt lúc bắt đầu (không dùng trang mở sau đó).
+interface RegionLock {
+  tab: RegionDest;
+  courseId: string;
+  chapterId: string;
+  lessonId: string;
+  partId: string;
+  documentId?: string;
+  docVersion: string;
+  pageNumber: number;
+}
+
+// Bản nháp hỗ trợ từ vùng khoanh: crop + nguồn + nội dung, chờ người học duyệt.
+interface SupportDraft {
+  crop: string;
+  noteId: string;
+  lock: RegionLock;
+  geometry: { x: number; y: number; w: number; h: number };
+}
 
 function fmtTime(iso: string) {
   // Cắt trực tiếp từ chuỗi ISO (UTC) — không dùng Date local để server và
@@ -218,6 +246,8 @@ function Workspace() {
   const [activeLessonId, setActiveLessonId] = useState("blas-cover");
   const [activePartId, setActivePartId] = useState("blas-cover-pdf");
   const [page, setPage] = useState(1);
+  const [viewMode, setViewMode] = useState<ReaderView>("single");
+  const [jump, setJump] = useState<{ page: number; nonce: number } | null>(null);
   const [tab, setTab] = useState<PanelTab>("notes");
   const [group, setGroup] = useState<GroupMode>("chapter");
   const [query, setQuery] = useState("");
@@ -516,6 +546,12 @@ function Workspace() {
     }
   }, [support]);
 
+  // Nạp hộp thư từ server khi đổi vai/lớp (coach khác trình duyệt đọc được).
+  useEffect(() => {
+    refreshSupport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, supClass]);
+
   useEffect(() => {
     try {
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
@@ -782,11 +818,12 @@ function Workspace() {
 
   const recentlyDeleted = items.filter((i) => i.deletedAt).slice(-3).reverse();
 
-  const pageItems = items.filter(
+  // Toàn bộ annotation của phần học đang mở — PageView lọc theo từng trang
+  // (đúng trong cả chế độ cuộn dọc).
+  const partItems = items.filter(
     (i) =>
       !i.deletedAt &&
       i.partId === activePart.id &&
-      (i.source.pageNumber ?? 0) === page &&
       (i.kind === "ink" || i.kind === "highlight" || i.kind === "region"),
   );
 
@@ -873,9 +910,11 @@ function Workspace() {
   }
 
   // Cầu nối từ PdfReader: annotation canvas → cùng LearningItem với panel.
-  function commitAnnotation(kind: ItemKind, payload: AnnotationPayload): string {
+  // pageNumber do trang khoanh/vẽ truyền lên (đúng trong cả chế độ cuộn dọc).
+  function commitAnnotation(kind: ItemKind, payload: AnnotationPayload, pageNumber?: number, assetUrl?: string): string {
     const source: LearningItem["source"] = {
       ...sourceNow(),
+      ...(pageNumber ? { pageNumber } : {}),
       ...(payload.quads ? { textAnchor: { quads: payload.quads } } : {}),
       ...(payload.geometry ? { geometry: payload.geometry } : {}),
     };
@@ -883,6 +922,7 @@ function Workspace() {
       source,
       quote: payload.quote,
       vectorData: payload.vectorData,
+      ...(assetUrl ? { assetUrl } : {}),
       body: payload.body ?? (kind === "region" ? "Mô tả điều chưa hiểu ở vùng đã khoanh…" : ""),
     });
     return item.id;
@@ -966,7 +1006,10 @@ function Workspace() {
   function openSource(it: LearningItem) {
     setActiveLessonId(it.lessonId);
     setActivePartId(it.partId);
-    if (it.source.pageNumber) setPage(it.source.pageNumber);
+    if (it.source.pageNumber) {
+      setPage(it.source.pageNumber);
+      setJump({ page: it.source.pageNumber, nonce: Date.now() });
+    }
     if (it.source.timestampMs !== undefined) setVideoTs(it.source.timestampMs);
     // Giữ panel ghi chú + mở sẵn các nhóm chứa note (không reset nhóm/scroll).
     setCollapsed((p) => {
@@ -989,6 +1032,7 @@ function Workspace() {
       }
     }
     setPage(s.page);
+    setJump({ page: s.page, nonce: Date.now() });
   }
 
   function startEdit(it: LearningItem) {
@@ -1049,51 +1093,144 @@ function Workspace() {
   const myId = role === "coach" ? "coach-1" : CURRENT_USER_ID;
 
   // F27 — Hỗ trợ/Điểm cộng trong prototype (không gửi tới VLearn thật).
+  // F27 — Hỗ trợ/Điểm cộng: server dùng chung cho mọi phiên (coach khác trình
+  // duyệt THỰC SỰ đọc được) + ngã về kho local khi server không ghi được.
+  const [supportServer, setSupportServer] = useState<"unknown" | "server" | "local">("unknown");
+
+  function supportActor() {
+    return role === "coach"
+      ? { id: "coach-1", role: "coach" as const, classId: supClass }
+      : { id: CURRENT_USER_ID, role: "learner" as const };
+  }
+
+  async function refreshSupport() {
+    const a = supportActor();
+    try {
+      const q = new URLSearchParams({ actorId: a.id, role: a.role, ...(a.classId ? { classId: a.classId } : {}) });
+      const res = await fetch(`/api/support?${q.toString()}`);
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      const data = (await res.json()) as { requests: SupportRequest[] };
+      setSupport(data.requests);
+      setSupportServer("server");
+    } catch {
+      setSupportServer("local");
+    }
+  }
+
   function sendSupport() {
     if (!supText.trim()) {
       setSaveMsg("Nội dung hỗ trợ trống — nhập rồi gửi.");
       return;
     }
-    const r: SupportRequest = {
-      id: newClientOperationId(),
-      learnerId: CURRENT_USER_ID,
+    const draft = supportDraft;
+    const payload = {
+      actor: supportActor(),
       classId: supClass,
       kind: supKind,
-      lessonId: activeLesson.lesson.id,
-      partId: activePart.id,
-      page: activePart.kind === "pdf" ? page : undefined,
+      lessonId: draft ? draft.lock.lessonId : activeLesson.lesson.id,
+      partId: draft ? draft.lock.partId : activePart.id,
+      page: draft ? draft.lock.pageNumber : activePart.kind === "pdf" ? page : undefined,
       text: supText.trim(),
-      status: "moi",
-      replies: [],
-      createdAt: new Date().toISOString(),
+      ...(draft ? { crop: draft.crop, noteId: draft.noteId, docVersion: draft.lock.docVersion } : {}),
     };
-    setSupport((prev) => [r, ...prev]);
-    setSupText("");
-    setSaveMsg("Đã gửi yêu cầu hỗ trợ (kho local prototype).");
+    const fallbackLocal = () => {
+      const r: SupportRequest = {
+        id: newClientOperationId(),
+        learnerId: CURRENT_USER_ID,
+        classId: supClass,
+        kind: supKind,
+        lessonId: payload.lessonId,
+        partId: payload.partId,
+        page: payload.page,
+        text: payload.text,
+        status: "moi",
+        replies: [],
+        createdAt: new Date().toISOString(),
+        ...(draft ? { crop: draft.crop, noteId: draft.noteId } : {}),
+      };
+      setSupport((prev) => [r, ...prev]);
+      setSupText("");
+      setSupportDraft(null);
+      setSupportServer("local");
+      setSaveMsg("Server không ghi được — đã lưu local trình duyệt này (coach nơi khác chưa thấy; cần Supabase).");
+    };
+    if (supportServer === "local") {
+      fallbackLocal();
+      return;
+    }
+    fetch("/api/support", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+        setSupText("");
+        setSupportDraft(null);
+        await refreshSupport();
+        setSaveMsg(`Đã gửi hỗ trợ tới ${supClass} — coach đọc được trên server (request lưu thật).`);
+      })
+      .catch(() => fallbackLocal());
   }
 
   function replySupport(id: string) {
     const text = (replyDraft[id] ?? "").trim();
     if (!text) return;
-    setSupport((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status: "da_tra_loi",
-              replies: [
-                ...r.replies,
-                { id: newClientOperationId(), from: role, text, at: new Date().toISOString() },
-              ],
-            }
-          : r,
-      ),
-    );
-    setReplyDraft((prev) => ({ ...prev, [id]: "" }));
+    const fallbackLocal = () => {
+      setSupport((prev) =>
+        prev.map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                status: "da_tra_loi",
+                replies: [
+                  ...r.replies,
+                  { id: newClientOperationId(), from: role, text, at: new Date().toISOString() },
+                ],
+              }
+            : r,
+        ),
+      );
+      setReplyDraft((prev) => ({ ...prev, [id]: "" }));
+    };
+    if (supportServer === "local") {
+      fallbackLocal();
+      return;
+    }
+    fetch(`/api/support/${id}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: supportActor(), text }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+        setReplyDraft((prev) => ({ ...prev, [id]: "" }));
+        await refreshSupport();
+      })
+      .catch(() => fallbackLocal());
   }
 
   function setSupStatus(id: string, status: SupportRequest["status"]) {
-    setSupport((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+    if (supportServer === "local") {
+      setSupport((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+      return;
+    }
+    fetch("/api/support", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: supportActor(), id, status }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+        refreshSupport();
+      })
+      .catch(() => {
+        setSupport((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+        setSaveMsg("Server không ghi được — đổi trạng thái local (coach nơi khác chưa thấy).");
+      });
   }
 
   // F03 — tiến độ do người học đánh dấu; xem ≠ hiểu.
@@ -1219,16 +1356,92 @@ function Workspace() {
 
   // F17 — hỏi AI về vùng đã khoanh: crop đúng vùng + ngữ cảnh trang + câu hỏi.
   // Crop chỉ giữ trong phiên (không persist localStorage để tránh phình kho).
-  function askVision(info: { rect: { x: number; y: number; w: number; h: number }; crop: string }) {
-    setVision({
-      ...info,
-      page,
-      lessonId: activeLesson.lesson.id,
-      partId: activePart.id,
-    });
+  function openVisionComposer(
+    crop: string,
+    rect: { x: number; y: number; w: number; h: number },
+    pageNumber: number,
+    lessonId: string,
+    partId: string,
+  ) {
+    setVision({ crop, rect, page: pageNumber, lessonId, partId });
     setVisQ("");
     setVisErr("");
-    setTab("ai");
+  }
+
+  // Khoanh vùng: chốt đích + nguồn lúc BẮT ĐẦU (sid chống trùng khi retry).
+  // Đổi tab giữa chừng → giữ pending, yêu cầu xác nhận đích, không tự chuyển.
+  const sessionSeq = useRef(0);
+  const regionLocks = useRef(new Map<number, RegionLock>());
+  const committedSids = useRef(new Set<number>());
+  const [pendingRegion, setPendingRegion] = useState<{ crop: RegionCrop; lock: RegionLock } | null>(null);
+  const [supportDraft, setSupportDraft] = useState<SupportDraft | null>(null);
+
+  function destTab(): RegionDest {
+    return tab === "ai" ? "ai" : tab === "support" ? "support" : "notes";
+  }
+
+  function destLabel(d: RegionDest): string {
+    return d === "ai" ? "Trợ giảng AI" : d === "support" ? "Hỗ trợ" : "Ghi chú của tôi";
+  }
+
+  function startRegion(pageNumber: number): number {
+    const sid = ++sessionSeq.current;
+    regionLocks.current.set(sid, {
+      tab: destTab(),
+      courseId: SEED_COURSE.id,
+      chapterId: activeLesson.ch.id,
+      lessonId: activeLesson.lesson.id,
+      partId: activePart.id,
+      documentId: activePart.documentId,
+      docVersion: kb?.sha256 ? kb.sha256.slice(0, 12) : "seed",
+      pageNumber,
+    });
+    return sid;
+  }
+
+  function finishRegion(crop: RegionCrop) {
+    if (committedSids.current.has(crop.sid)) return; // retry/double-fire không tạo trùng
+    committedSids.current.add(crop.sid);
+    const lock = regionLocks.current.get(crop.sid);
+    regionLocks.current.delete(crop.sid);
+    if (!lock) return;
+    if (lock.tab !== destTab()) {
+      // Tab đổi giữa chừng: giữ nguyên vùng + nguồn đã chốt, chờ xác nhận đích.
+      setPendingRegion({ crop, lock });
+      return;
+    }
+    executeRegion(lock.tab, crop, lock);
+  }
+
+  function executeRegion(dest: RegionDest, crop: RegionCrop, lock: RegionLock) {
+    // Cả ba luồng dùng chung thao tác chọn vùng nhưng dữ liệu/hành vi riêng.
+    // Luôn tạo note annotation (F10) kèm crop + nguồn đã chốt — không gọi AI ở đây.
+    const id = commitAnnotation(
+      "region",
+      { geometry: { rect: crop.rect }, body: "Mô tả điều chưa hiểu ở vùng đã khoanh…" },
+      crop.pageNumber,
+      crop.cropSmall,
+    );
+    // Mở sẵn các nhóm chứa note mới trong bộ ghi chú.
+    setCollapsed((p) => {
+      const n = { ...p };
+      delete n[`ch:${lock.chapterId}`];
+      delete n[`le:${lock.lessonId}`];
+      delete n[`sl:${lock.partId}::${lock.pageNumber}`];
+      return n;
+    });
+    if (dest === "ai") {
+      // Đưa crop vào composer, hiện preview + slide nguồn; KHÔNG tự gửi.
+      openVisionComposer(crop.crop, crop.rect, crop.pageNumber, lock.lessonId, lock.partId);
+      setTab("ai");
+      setSaveMsg("Vùng khoanh đã vào composer AI — nhập câu hỏi rồi bấm Gửi.");
+    } else if (dest === "support") {
+      setSupportDraft({ crop: crop.crop, noteId: id, lock, geometry: crop.rect });
+      setTab("support");
+      setSaveMsg("Vùng khoanh đã vào bản nháp hỗ trợ — kiểm tra rồi bấm Gửi hỗ trợ.");
+    } else {
+      setSaveMsg("Đã lưu vùng khoanh vào ghi chú (kèm crop + nguồn) — chưa gọi AI.");
+    }
   }
 
   async function sendVision(isRetry = false) {
@@ -2210,6 +2423,59 @@ function Workspace() {
         </div>
       </header>
       <div style={{ fontSize: 12, padding: "6px 16px", opacity: 0.75 }}>{t.brandNote}</div>
+      {pendingRegion && (
+        <div
+          role="alertdialog"
+          aria-label="Xác nhận đích của vùng khoanh"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: 16,
+            transform: "translateX(-50%)",
+            zIndex: 60,
+            maxWidth: 560,
+            background: dark ? "#1d2a36" : "#FFFFFF",
+            border: `2px solid ${TOK.primary}`,
+            borderRadius: 12,
+            padding: 12,
+            fontSize: 13,
+            boxShadow: "0 4px 16px rgba(0,0,0,.2)",
+          }}
+        >
+          <div>
+            Vùng khoanh bắt đầu ở tab <strong>{destLabel(pendingRegion.lock.tab)}</strong> (trang{" "}
+            {pendingRegion.lock.pageNumber}), nhưng tab hiện tại là{" "}
+            <strong>{destLabel(destTab())}</strong>. Vùng và nguồn đã chốt được giữ nguyên —
+            chọn nơi gửi, không tự chuyển luồng.
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={() => {
+                const p = pendingRegion;
+                setPendingRegion(null);
+                setTab(p.lock.tab);
+                executeRegion(p.lock.tab, p.crop, p.lock);
+              }}
+              style={btnPrimary()}
+            >
+              Giữ {destLabel(pendingRegion.lock.tab)}
+            </button>
+            <button
+              onClick={() => {
+                const p = pendingRegion;
+                setPendingRegion(null);
+                executeRegion(destTab(), p.crop, p.lock);
+              }}
+              style={btn(dark)}
+            >
+              Chuyển sang {destLabel(destTab())}
+            </button>
+            <button onClick={() => setPendingRegion(null)} style={btn(dark)}>
+              Hủy vùng khoanh
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "stretch", minHeight: "calc(100vh - 90px)" }}>
         {/* Mục lục trái */}
@@ -2317,12 +2583,26 @@ function Workspace() {
               url={activePart.assetUrl ?? SAMPLE_PDF_URL}
               page={page}
               onPageChange={setPage}
-              pageItems={pageItems}
+              pageItems={partItems}
               onCommit={commitAnnotation}
               onErase={softDelete}
               onClearPage={clearPage}
               dark={dark}
-              onAskRegion={askVision}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              jumpPage={jump}
+              regionTab={destTab()}
+              regionCtx={{
+                courseId: SEED_COURSE.id,
+                chapterId: activeLesson.ch.id,
+                lessonId: activeLesson.lesson.id,
+                partId: activePart.id,
+                documentId: activePart.documentId,
+                docVersion: kb?.sha256 ? kb.sha256.slice(0, 12) : "seed",
+              }}
+              onSelectDestTab={(t) => setTab(t)}
+              onRegionStart={startRegion}
+              onRegionFinish={finishRegion}
             />
           )}
 
@@ -2534,14 +2814,19 @@ function Workspace() {
               display: "flex",
               flexDirection: "column",
               gap: 8,
+              // Panel có vùng cuộn riêng (không cuộn chung với slide).
+              maxHeight: "calc(100vh - 90px)",
+              overflowY: "auto",
+              position: "sticky",
+              top: 90,
               ...(isMobile
                 ? {
                     position: "fixed",
                     top: 60,
                     bottom: 0,
                     right: 0,
+                    maxHeight: "none",
                     zIndex: 30,
-                    overflowY: "auto",
                     boxShadow: "0 4px 16px rgba(0,0,0,.2)",
                   }
                 : {}),
@@ -3180,6 +3465,46 @@ function Workspace() {
                 <span style={{ opacity: 0.75, fontSize: 12 }}>
                   Chạy trong prototype — không gửi tới nhân sự VLearn thật, không cộng điểm production.
                 </span>
+                <span style={{ fontSize: 12, opacity: 0.8 }}>
+                  {supportServer === "server"
+                    ? "Kho server: coach khác trình duyệt đọc và trả lời được yêu cầu này."
+                    : supportServer === "local"
+                      ? "Kho local trình duyệt này: coach ở nơi khác chưa thấy — cần Supabase để chia sẻ (BLOCKED)."
+                      : "Đang kiểm tra kho server…"}
+                </span>
+                {supportDraft && role === "learner" && (
+                  <div
+                    style={{
+                      border: `2px solid ${TOK.primary}`,
+                      borderRadius: 8,
+                      padding: 8,
+                    }}
+                  >
+                    <strong>Bản nháp từ vùng khoanh (chưa gửi)</strong>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={supportDraft.crop}
+                      alt="Crop vùng khoanh đính kèm"
+                      style={{ maxWidth: "100%", borderRadius: 6, marginTop: 6 }}
+                    />
+                    <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+                      Nguồn đã chốt: {supportDraft.lock.lessonId} / {supportDraft.lock.partId} / trang{" "}
+                      {supportDraft.lock.pageNumber} · tài liệu {supportDraft.lock.docVersion}
+                      {supportDraft.noteId ? ` · note ${supportDraft.noteId.slice(0, 8)}` : ""}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>
+                      Lớp nhận: {supClass} · kiểm tra nội dung rồi bấm Gửi hỗ trợ.
+                    </div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      <button onClick={sendSupport} style={btnPrimary()}>
+                        Gửi hỗ trợ
+                      </button>
+                      <button onClick={() => setSupportDraft(null)} style={btn(dark)}>
+                        Hủy nháp
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {role === "learner" && (
                   <>
                     <label style={{ fontSize: 12 }}>
@@ -3209,8 +3534,18 @@ function Workspace() {
                       rows={3}
                       style={input(dark)}
                     />
-                    <button onClick={sendSupport} style={btn(dark)}>Gửi yêu cầu</button>
+                    <button onClick={sendSupport} style={btnPrimary()}>Gửi yêu cầu</button>
                   </>
+                )}
+                {role === "coach" && (
+                  <label style={{ fontSize: 12 }}>
+                    Lớp phụ trách (chỉ nhận yêu cầu đúng lớp này):{" "}
+                    <select value={supClass} onChange={(e) => setSupClass(e.target.value)}>
+                      {CLASSES.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </label>
                 )}
                 {(role === "coach" ? support : support.filter((r) => r.learnerId === CURRENT_USER_ID)).map((r) => (
                   <article
@@ -3227,6 +3562,14 @@ function Workspace() {
                       {fmtTime(r.createdAt)}
                     </div>
                     <div style={{ fontSize: 13 }}>{r.text}</div>
+                    {r.crop && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={r.crop}
+                        alt="Crop vùng khoanh của yêu cầu"
+                        style={{ maxWidth: "100%", borderRadius: 6, marginTop: 6 }}
+                      />
+                    )}
                     <button
                       onClick={() => {
                         setActiveLessonId(r.lessonId);
@@ -3238,7 +3581,10 @@ function Workspace() {
                             break;
                           }
                         }
-                        if (r.page) setPage(r.page);
+                        if (r.page) {
+                          setPage(r.page);
+                          setJump({ page: r.page, nonce: Date.now() });
+                        }
                       }}
                       style={{ ...btn(dark), marginTop: 4 }}
                     >

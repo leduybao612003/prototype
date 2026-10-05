@@ -85,6 +85,27 @@ hiện quote gốc; mỗi lần sửa đẩy bản cũ vào `history` (tối đa
 | FIX-02 | Sửa 2 lần liên tiếp | PASS | nút “Lịch sử (2)” |
 | FIX-03 | Mở lịch sử → reload → khôi phục bản cũ | PASS | thấy “Diễn giải lần 1”, reload còn, khôi phục về được; fix-history.png |
 | FIX-CONSOLE | pageerror | PASS | 0 |
+
+## E2E luồng khoanh + cuộn dọc + hỗ trợ 2 phiên (Chrome thật, port 3117, build production)
+
+Script 1 lần (không commit). Screenshots: `flows-continuous.png`, `flows-notes.png`,
+`flows-ai.png`, `flows-support-learner.png`, `flows-support-coach.png`.
+Nhờ e2e còn bắt được 2 bug thật đã fix: deep-link `/learn/...` 404 (đợt trước)
+và closure cũ giữ tab khi đổi tab giữa lúc khoanh (đợt này).
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| F-CONT-01 | Cuộn dọc: nhiều canvas + nhãn Slide n/11, cuộn cập nhật trang, thumbnail nhảy | PASS | 3 canvas render + placeholders, tr.6 giữa chừng, thumb→tr.7 |
+| F-CONT-02 | Khoanh ở trang 7 trong cuộn dọc | PASS | note “Vùng chưa hiểu trang 7” đúng nguồn |
+| F-CONT-03 | Về Từng slide giữ slide | PASS | tr.7 |
+| F-NOTES | Khoanh ở tab Ghi chú | PASS | note mới + crop, ai=0 post, support=0 post |
+| F-AI | Khoanh ở tab AI → composer → Gửi tay | PASS | preview + nguồn, không tự gửi, 1 request mock `[MÔ PHỎNG vision]` |
+| F-SWITCH | Đổi tab giữa lúc khoanh | PASS | thanh xác nhận đích, Giữ tab gốc → note tạo, ai=0 post |
+| F-SUP-01 | Learner: nháp crop → Gửi hỗ trợ | PASS | request lưu server thật (“coach đọc được trên server”) |
+| F-SUP-02 | Coach phiên trình duyệt khác: thấy crop, mở nguồn, trả lời, đổi trạng thái | PASS | crop=1, tr.7, reply + Đang xử lý (server chung, không phải localStorage) |
+| F-SUP-03 | Learner reload thấy phản hồi + trạng thái | PASS | reply + “Đang xử lý” |
+| F-PERM | Quyền backend: learner khác thấy 0; coach tạo 403; learner đổi trạng thái 403; người lạ trả lời 403; coach sai lớp 403 | PASS | FORBIDDEN đúng 4 trường hợp (server kiểm tra, không chỉ ẩn nút) |
+| F-CONSOLE | pageerror | PASS | 0 |
 | T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 

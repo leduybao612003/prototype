@@ -30,18 +30,18 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F03 | Tiến độ (ghi/đọc, quy tắc doc, xem ≠ hiểu) | Quan sát/Đối chiếu | implemented (đánh dấu đã xem thủ công + quy tắc hiển thị, kho local) | thủ công browser còn lại |
 | F14 | Ghi chú text/sticky (tạo/sửa/kéo/resize, lưu, mở lại) | Quan sát/Đối chiếu | implemented (tạo/sửa/xóa draft local; kéo/resize trên slide chưa làm) | kéo/resize planned |
 | F04 | PDF reader thật, text layer chọn được | Ảnh toolbar | implemented (PDF.js canvas + text layer + worker) | verify trên browser còn lại |
-| F05 | Điều hướng PDF (trang, nhập số, keyboard, thumbnail, deep link) | Quan sát/brief-text | implemented (nav, nhập số, ←/→, thumbnails lazy, deep link `?part=&page=&item=`) | thủ công browser còn lại |
-| F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | implemented (đơn trang, zoom 50–300%, fullscreen) | cuộn dọc liên tục chưa làm |
+| F05 | Điều hướng PDF (trang, nhập số, keyboard, thumbnail, deep link) | Quan sát/brief-text | implemented (nav, nhập số, ←/→, thumbnails lazy, deep link `/learn/...` + jump đúng slide cuộn dọc) | e2e F-CONT-01/03, UI-03 |
+| F06 | Chế độ xem (trang/cuộn, zoom, fullscreen) | Quan sát/Đối chiếu | implemented (Từng slide + Cuộn dọc virtualize ±2, zoom 50–300%, fullscreen, giữ annotation) | e2e F-CONT-01–03 + screenshots |
 | F07 | Đọc và chọn chữ (selection đúng text, không vẽ khi đọc) | Ảnh 01 đã xem | implemented (text layer span + scaleX) | thủ công browser còn lại |
 | F08 | Viết tay (pointer/touch, màu/dày, vector theo trang) | Ảnh 02 đã xem | implemented (SVG overlay, 3 màu, 2 cỡ, tọa độ chuẩn hóa) | thủ công browser còn lại |
 | F09 | Highlight (quote + anchor, giữ highlight nét nếu có) | Ảnh 03 đã xem | implemented (selection → quads + quote; sửa điền sẵn body‖quote + hiện quote gốc; lịch sử 5 bản + khôi phục) | e2e FIX-01–03 PASS; thủ công browser còn lại |
-| F10 | Khoanh vùng chưa hiểu (vùng + preview trong notebook) | Ảnh 04 đã xem | implemented (drag rect → region unresolved) | thủ công browser còn lại |
+| F10 | Khoanh vùng chưa hiểu (vùng + preview trong notebook) | Ảnh 04 đã xem | implemented (drag rect → region unresolved kèm crop; đích chốt lúc bắt đầu: notes/ai/support; đổi tab giữa chừng → xác nhận, không tự chuyển; session chống trùng) | e2e F-NOTES/F-SWITCH |
 | F11 | Tẩy đúng object | Ảnh 05 đã xem | implemented (chế độ tẩy click object) | thủ công browser còn lại |
 | F12 | Undo trang (Ctrl/Cmd+Z khi annotate, không chiếm undo editor) | Ảnh 06 đã xem | implemented (stack id theo instance reader) | undo sau chuyển phần học mất stack — ghi nhận |
 | F13 | Xóa annotation trang hiện tại (confirm + undo, trang khác giữ) | Ảnh 07 đã xem | implemented (confirm + soft delete + Hoàn tác) | thủ công browser còn lại |
 | F15 | Sổ note và ảnh (mở/đóng, chèn ảnh, reorder/resize) | Quan sát/Đối chiếu | implemented (mở/đóng, chèn ảnh local, reorder cơ bản) | thủ công |
 | F16 | Ghi chú giảng viên (theo nguồn, không cho sửa, empty đúng) | Quan sát | implemented (seed 2 mục, read-only) | thủ công |
-| F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | implemented một phần (khoanh → crop đúng vùng + preview + câu hỏi → POST /api/ai/vision kèm text trang; chưa vision key → 503 VISION_BLOCKED thật + retry, không fake) | API live 05/10/2026: 503/400 verified; click browser còn lại |
+| F17 | Khoanh vùng hỏi AI (preview crop + context + nhập câu hỏi) | Quan sát/Đối chiếu | implemented (toolbar đích rõ Lưu/AI/Hỗ trợ; crop đúng vùng + composer preview + nguồn + Gửi tay; chưa vision key → mock ghi rõ mô phỏng; live 503) | e2e F-AI, F-SWITCH |
 | F18 | Gợi ý câu hỏi theo slide (chọn → trả lời AI thật) | Quan sát | implemented (gợi ý theo slide → điền vào luồng AI thật prototype-local + KB ingested; provider live deferred) | API chat 200 đã verify |
 | F19 | Trợ giảng AI (chat nhiều lượt, stream, stop/retry, nguồn, history) | Quan sát + yêu cầu mới | implemented một phần (nhiều lượt, retry, chat mới, nguồn mở đúng trang, history local; stream thật passthrough SSE khi có key + nút Dừng; thiếu key → 503 STREAM_BLOCKED) | stream live BLOCKED (no key); JSON + 503 verified live |
 | F20 | Lịch sử AI (chat mới/mở lại/rename/xóa/feedback/dock/resize) | Quan sát/Đối chiếu | implemented (đa luồng local: mới/mở/đổi tên/xóa; feedback câu trả lời + dock/resize chưa làm) | thủ công browser còn lại |
@@ -51,7 +51,7 @@ Trạng thái: `planned` (chưa làm) | `implemented` (đã code) | `tested` (c�
 | F24 | Tài liệu (xem/tải asset có quyền, empty thật) | Quan sát/Đối chiếu | implemented (liệt kê + empty thật) | thủ công |
 | F25 | Like/dislike, Hữu ích/Chưa hữu ích, bình luận (validate + persistence) | Quan sát/Đối chiếu | implemented một phần (Hữu ích/Chưa hữu ích theo bài, kho local; bình luận chưa làm) | bình luận planned |
 | F26 | Phản hồi bối rối (Khó hiểu/Bế tắc/Đã hiểu + text, khử định danh) | Quan sát/Đối chiếu | implemented (form riêng, lưu ẩn danh không owner/email, tách khỏi báo lỗi kỹ thuật) | thủ công browser còn lại |
-| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | implemented (chọn lớp + Hỗ trợ/Điểm cộng + đính kèm nguồn + coach trả lời/đổi trạng thái, chuyển vai learner/coach, kho local) | thủ công browser còn lại; prototype nội bộ |
+| F27 | Hỗ trợ labcoach (chọn lớp, gửi, đính kèm nguồn, coach xem/trả lời) | Quan sát/Đối chiếu | implemented (nháp từ vùng khoanh + Gửi hỗ trợ → request lưu server thật; coach đúng lớp nhận/xem crop/mở nguồn/trả lời/đổi trạng thái; quyền kiểm tra ở backend 403; ngã local + banner khi server không ghi) | e2e F-SUP-01–03 (2 phiên) + F-PERM |
 | F28 | Menu tài khoản/báo cáo (profile, báo lỗi, báo cáo tiến độ từ dữ liệu thật) | Quan sát/Đối chiếu | implemented một phần (menu tài khoản: profile prototype + chuyển vai + báo cáo tiến độ từ kho local; báo lỗi kỹ thuật chưa tách form riêng) | báo lỗi form planned |
 | F29 | Lab/checkpoint (nội dung, checklist/submission/status thật) | Đối chiếu (chưa xác minh) | planned | không nhận giống lab engine gốc |
 | F30 | Giao diện/ngôn ngữ (sáng/tối, VI/EN control gốc, lưu preference) | Quan sát/Đối chiếu | implemented (VI mặc định, toggle sáng/tối + preference local; mobile drawer ≤900px) | thủ công |
