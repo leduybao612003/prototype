@@ -146,6 +146,7 @@ extractable (0 spans PDF.js) nên test chọn chữ chạy ở trang 4.
 | D-REGION-DEST | Nút đích khoanh chuyển tab thật (hồi quy) | PASS | aria-pressed tab AI |
 | D-ERR | pageerror | PASS | 0 |
 | D-REGRESS | Toàn bộ e2e-flows (khoanh vùng + support 2 phiên) | PASS | 10/10 |
+| D-PROD | Production sau push `bcb797e`: homepage + health | PASS | `/` render cây + tokens + badge; `/api/health` 200 `aiMode:mock` |
 
 ## E2E hồi quy nguồn note (Chrome thật, port 3118, build production)
 
