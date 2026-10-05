@@ -49,6 +49,14 @@ Khi có: đặt `AI_MODE=live`, deploy lại, chạy lại T22–T29 live. Code 
 - Video/transcript asset thật (F21–F23, T16–T17): BLOCKED — cần asset được phép dùng.
 - Deploy Vercel: ĐÃ DEPLOY (`https://prototype-wine-one.vercel.app/`, T34 PASS).
   Đợt này push tiếp: reader Cuộn dọc + routing khoanh + support server.
+- Fix luồng learner–coach 05/10/2026 (bug mất request khi đổi profile):
+  nguyên nhân = GET server rỗng ghi đè local (xác minh). Fix merge union +
+  idempotent clientId + unread + polling — e2e S-ADV/S-LIVE/S-DEDUPE PASS.
+  Giới hạn trung thực: kho file dùng chung được giữa các trình duyệt ở cùng
+  origin khi server ghi được (localhost); trên Vercel filesystem ephemeral nên
+  ngã local + banner, coach trình duyệt khác chưa thấy — cần Supabase cho
+  production (BLOCKED). Quyền backend hiện kiểm tra vai trò khai báo (chưa
+  Auth thật — cần Supabase Auth + RLS).
 - Nợ code còn lại: tách `page.tsx`, 3 unused vars, React Bits component.
 - Fix nguồn note 05/10/2026 (bug ảnh: note tr.6 rơi vào nhóm tr.4–5):
   `src/lib/lessonMap.ts` resolver chung + chốt nguồn lúc tạo + tự sửa note sai

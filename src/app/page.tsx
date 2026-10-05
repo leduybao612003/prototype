@@ -188,6 +188,11 @@ interface SupportRequest {
   createdAt: string;
   crop?: string;
   noteId?: string;
+  rev?: number;
+  coachUnread?: boolean;
+  learnerUnread?: boolean;
+  // Chỉ local: chưa đồng bộ lên server (giữ lại khi refresh/đổi profile).
+  pendingSync?: boolean;
 }
 
 const CLASSES = ["Lớp AI20k-01", "Lớp AI20k-02"];
@@ -368,6 +373,7 @@ function Workspace() {
   const [labDone, setLabDone] = useState<Record<string, boolean>>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const itemsRef = useRef<LearningItem[]>(SEED_ITEMS);
+  const supportRef = useRef<SupportRequest[]>([]);
   // Phân cấp ghi chú Chương→Bài→Slide: nhóm nào đóng/mở (mặc định mở).
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   // Kéo thả sắp xếp trong cùng slide: id đang kéo + vị trí chèn.
@@ -550,6 +556,7 @@ function Workspace() {
   }, [threads]);
 
   useEffect(() => {
+    supportRef.current = support;
     try {
       localStorage.setItem(SUPPORT_KEY, JSON.stringify(support));
     } catch {
@@ -562,6 +569,24 @@ function Workspace() {
     refreshSupport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, supClass]);
+
+  // Polling nhẹ khi đang ở tab Hỗ trợ + refetch khi focus lại (realtime thay thế
+  // khi chưa có Supabase Realtime; không mất dữ liệu local vì merge union).
+  useEffect(() => {
+    if (tab !== "support") return;
+    const t = setInterval(() => {
+      refreshSupport();
+    }, 15000);
+    const onFocus = () => {
+      refreshSupport();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   useEffect(() => {
     try {
@@ -1141,11 +1166,32 @@ function Workspace() {
       const res = await fetch(`/api/support?${q.toString()}`);
       if (!res.ok) throw new Error(`HTTP_${res.status}`);
       const data = (await res.json()) as { requests: SupportRequest[] };
-      setSupport(data.requests);
+      // Merge union theo id — KHÔNG BAO GIỜ ghi đè toàn bộ (sửa bug mất request
+      // khi đổi profile: server rỗng/lỗi không được xóa bản local).
+      setSupport((prev) => mergeSupport(prev, data.requests));
       setSupportServer("server");
     } catch {
-      setSupportServer("local");
+      // Giữ nguyên dữ liệu đang có; chỉ đổi nhãn chế độ.
+      setSupportServer((prev) => (prev === "unknown" ? "local" : prev === "server" ? "local" : prev));
     }
+  }
+
+  // Hợp nhất kho local + server: cùng id thì bản rev cao thắng; bản local đang
+  // chờ đồng bộ (pendingSync) được giữ lại để retry, không bị bản server cũ đè.
+  function mergeSupport(local: SupportRequest[], remote: SupportRequest[]): SupportRequest[] {
+    const map = new Map(local.map((r) => [r.id, r]));
+    for (const s of remote) {
+      const cur = map.get(s.id);
+      if (!cur) {
+        map.set(s.id, s);
+        continue;
+      }
+      const lr = cur.rev ?? 0;
+      const sr = s.rev ?? 0;
+      if (cur.pendingSync && sr <= lr) continue; // giữ bản local chờ sync
+      map.set(s.id, { ...s, pendingSync: cur.pendingSync && sr <= lr ? true : undefined });
+    }
+    return [...map.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   function sendSupport() {
@@ -1154,8 +1200,11 @@ function Workspace() {
       return;
     }
     const draft = supportDraft;
+    // clientId ổn định do client sinh — retry gửi lại không tạo trùng (server dedupe).
+    const clientId = newClientOperationId();
     const payload = {
       actor: supportActor(),
+      clientId,
       classId: supClass,
       kind: supKind,
       lessonId: draft ? draft.lock.lessonId : activeLesson.lesson.id,
@@ -1167,7 +1216,7 @@ function Workspace() {
     };
     const fallbackLocal = () => {
       const r: SupportRequest = {
-        id: newClientOperationId(),
+        id: clientId,
         learnerId: CURRENT_USER_ID,
         classId: supClass,
         kind: supKind,
@@ -1178,7 +1227,10 @@ function Workspace() {
         status: "moi",
         replies: [],
         createdAt: new Date().toISOString(),
+        rev: 0,
+        coachUnread: true,
         ...(draft ? { crop: draft.crop, noteId: draft.noteId } : {}),
+        pendingSync: true,
       };
       setSupport((prev) => [r, ...prev]);
       setSupText("");
@@ -1209,6 +1261,7 @@ function Workspace() {
   function replySupport(id: string) {
     const text = (replyDraft[id] ?? "").trim();
     if (!text) return;
+    const replyId = newClientOperationId();
     const fallbackLocal = () => {
       setSupport((prev) =>
         prev.map((r) =>
@@ -1216,9 +1269,11 @@ function Workspace() {
             ? {
                 ...r,
                 status: "da_tra_loi",
+                rev: (r.rev ?? 0) + 1,
+                pendingSync: true,
                 replies: [
                   ...r.replies,
-                  { id: newClientOperationId(), from: role, text, at: new Date().toISOString() },
+                  { id: replyId, from: role, text, at: new Date().toISOString() },
                 ],
               }
             : r,
@@ -1233,7 +1288,7 @@ function Workspace() {
     fetch(`/api/support/${id}/reply`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: supportActor(), text }),
+      body: JSON.stringify({ actor: supportActor(), text, clientId: replyId }),
     })
       .then(async (res) => {
         const data = await res.json();
@@ -1244,6 +1299,42 @@ function Workspace() {
       .catch(() => fallbackLocal());
   }
 
+  // Gửi lại bản local chưa đồng bộ — dùng đúng clientId/id cũ nên server dedupe,
+  // không tạo bản trùng. Chỉ hiện “Đã gửi” sau khi persistence xác nhận.
+  function retrySupportSync(id: string) {
+    const r = supportRef.current.find((x) => x.id === id);
+    if (!r) return;
+    const payload = {
+      actor: supportActor(),
+      clientId: r.id,
+      classId: r.classId,
+      kind: r.kind,
+      lessonId: r.lessonId,
+      partId: r.partId,
+      page: r.page,
+      text: r.text,
+      ...(r.crop ? { crop: r.crop } : {}),
+      ...(r.noteId ? { noteId: r.noteId } : {}),
+    };
+    fetch("/api/support", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error((data as { message?: string }).message ?? `HTTP_${res.status}`);
+        await refreshSupport();
+        setSaveMsg(
+          (data as { deduped?: boolean }).deduped
+            ? "Server đã có yêu cầu này (không tạo trùng) — đã đồng bộ."
+            : "Đã đồng bộ yêu cầu lên server — coach đọc được.",
+        );
+      })
+      .catch((e: unknown) => {
+        setSaveMsg(`Đồng bộ thất bại (${e instanceof Error ? e.message : "lỗi mạng"}) — bản nháp vẫn giữ, bấm Gửi lại.`);
+      });
+  }
   function setSupStatus(id: string, status: SupportRequest["status"]) {
     if (supportServer === "local") {
       setSupport((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
@@ -3600,6 +3691,32 @@ function Workspace() {
                       {r.status === "moi" ? "Mới" : r.status === "dang_xu_ly" ? "Đang xử lý" : "Đã trả lời"} ·{" "}
                       {fmtTime(r.createdAt)}
                     </div>
+                    {(role === "coach" ? r.coachUnread : r.learnerUnread) && (
+                      <div
+                        style={{
+                          display: "inline-block",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: TOK.unresolvedInk,
+                          background: TOK.unresolved,
+                          borderRadius: 6,
+                          padding: "1px 8px",
+                          marginTop: 4,
+                        }}
+                      >
+                        Chưa đọc
+                      </div>
+                    )}
+                    {r.pendingSync && (
+                      <div style={{ fontSize: 12, marginTop: 4 }}>
+                        <span style={{ color: "#b42318", fontWeight: 700 }}>
+                          Chưa đồng bộ lên server (chỉ ở trình duyệt này).
+                        </span>{" "}
+                        <button onClick={() => retrySupportSync(r.id)} style={btn(dark)}>
+                          Gửi lại
+                        </button>
+                      </div>
+                    )}
                     <div style={{ fontSize: 13 }}>{r.text}</div>
                     {r.crop && (
                       // eslint-disable-next-line @next/next/no-img-element

@@ -107,6 +107,25 @@ và closure cũ giữ tab khi đổi tab giữa lúc khoanh (đợt này).
 | F-PERM | Quyền backend: learner khác thấy 0; coach tạo 403; learner đổi trạng thái 403; người lạ trả lời 403; coach sai lớp 403 | PASS | FORBIDDEN đúng 4 trường hợp (server kiểm tra, không chỉ ẩn nút) |
 | F-CONSOLE | pageerror | PASS | 0 |
 
+## E2E fix luồng learner–coach (Chrome thật, port 3119, build production)
+
+Bug người dùng báo: gửi → hiện, đổi sang coach mất, về learner cũng mất.
+Nguyên nhân đã xác minh (trace code): learner gửi trên production → POST ghi
+file thất bại (Vercel read-only) → 503 → ngã local; đổi coach → GET đọc file
+không tồn tại → `loadSupport` nuốt lỗi trả `[]` 200 → `setSupport([])` ghi đè +
+persist `[]` vào localStorage → mất hẳn. Không phải đoán.
+Fix: server gate filesystem (`VERCEL=1` → 503, không bao giờ 200-[] khi kho hỏng;
+idempotent `clientId` cho request/reply; `rev` + cờ unread) + client merge union
+theo id (không ghi đè), `pendingSync` + nút Gửi lại, badge Chưa đọc, polling
+15s + refetch khi focus. Screenshots: `supfix-advanced.png`, `supfix-live.png`.
+
+| Test | Kịch bản | Kết quả | Evidence |
+|---|---|---|---|
+| S-ADV | Mô phỏng đúng production hỏng (GET [] 200, POST/PATCH 503): gửi → coach → về → reload → retry | PASS | 1 bản duy nhất xuyên suốt (1/1/1/1/1), nhãn chờ sync, retry không trùng/không báo giả |
+| S-LIVE | Server thật 2 phiên: coach thấy Chưa đọc → trả lời → learner thấy + Chưa đọc | PASS | unread 2 chiều, reply qua requestId chung |
+| S-DEDUPE | POST/reply trùng clientId qua API | PASS | request deduped:true cùng id; replies=1 |
+| S-ERR | pageerror | PASS | 0 |
+
 ## E2E hồi quy nguồn note (Chrome thật, port 3118, build production)
 
 Bug người dùng báo (có ảnh): note tạo ở trang 6 rơi vào nhóm “Problem statement +

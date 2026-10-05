@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { canReply, loadSupport, saveSupport, type Actor } from "@/lib/supportStore";
-import { newClientOperationId } from "@/lib/types";
+import { canReply, loadSupport, saveSupport, storeAvailable, type Actor } from "@/lib/supportStore";
 
 // POST /api/support/[id]/reply — chủ yêu cầu hoặc coach đúng lớp được trả lời.
-// Kiểm tra quyền ở backend (không chỉ ẩn nút trên UI).
+// Kiểm tra quyền ở backend (không chỉ ẩn nút trên UI). Reply idempotent theo
+// clientId để retry không tạo trùng.
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const parsed = z
@@ -14,11 +14,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         classId: z.string().max(100).optional(),
       }),
       text: z.string().min(1).max(2000),
+      clientId: z.string().min(1).max(200).optional(),
     })
     .safeParse(await req.json().catch(() => null));
   if (!parsed.success)
     return Response.json({ code: "INVALID_BODY", issues: parsed.error.issues }, { status: 400 });
-  const { actor, text } = parsed.data;
+  const { actor, text, clientId } = parsed.data;
+  if (!(await storeAvailable()))
+    return Response.json({ code: "STORE_UNAVAILABLE", message: "Kho server không dùng được." }, { status: 503 });
   let all;
   try {
     all = await loadSupport();
@@ -33,8 +36,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       { status: 403 },
     );
   const now = new Date().toISOString();
-  r.replies.push({ id: newClientOperationId(), from: actor.role, text, at: now });
-  if (actor.role === "coach" && r.status === "moi") r.status = "da_tra_loi";
+  if (clientId && r.replies.some((m) => m.id === clientId))
+    return Response.json({ mode: "server", request: r, deduped: true });
+  r.replies.push({
+    id: clientId ?? `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
+    from: actor.role,
+    text,
+    at: now,
+  });
+  r.rev += 1;
+  if (actor.role === "coach") {
+    if (r.status === "moi") r.status = "da_tra_loi";
+    r.coachUnread = false;
+    r.learnerUnread = true;
+  } else {
+    r.coachUnread = true;
+    r.learnerUnread = false;
+  }
   try {
     await saveSupport(all);
   } catch {

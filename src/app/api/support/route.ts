@@ -4,10 +4,10 @@ import {
   canSetStatus,
   loadSupport,
   saveSupport,
+  storeAvailable,
   type Actor,
   type SupportRequest,
 } from "@/lib/supportStore";
-import { newClientOperationId } from "@/lib/types";
 import { resolveSource, SAMPLE_DOC_ID } from "@/lib/lessonMap";
 
 const actorSchema = z.object({
@@ -18,6 +18,9 @@ const actorSchema = z.object({
 
 const createSchema = z.object({
   actor: actorSchema,
+  // clientId do client sinh (stable) — retry gửi lại không tạo trùng
+  // (gặp id đã có thì trả bản hiện có + deduped:true).
+  clientId: z.string().min(1).max(200).optional(),
   classId: z.string().min(1).max(100),
   kind: z.enum(["HoTro", "DiemCong"]),
   lessonId: z.string().min(1).max(100),
@@ -39,17 +42,20 @@ function unavailable() {
     {
       code: "STORE_UNAVAILABLE",
       message:
-        "Kho server không ghi/đọc được (Vercel Functions dùng filesystem ephemeral — xem DEPLOYMENT.md). " +
-        "Client giữ bản local; coach ở trình duyệt khác chưa thấy. Cần Supabase cho chia sẻ production.",
+        "Kho server không dùng được ở môi trường này (Vercel Functions dùng filesystem " +
+        "ephemeral — xem DEPLOYMENT.md). Client giữ bản local; coach ở trình duyệt khác " +
+        "chưa thấy. Cần Supabase cho chia sẻ production.",
     },
     { status: 503 },
   );
 }
 
 // GET /api/support?actorId=&role=&classId= — danh sách theo quyền.
+// KHÔNG BAO GIỜ trả [] rỗng khi kho hỏng (trả 503 để client không wipe local).
 export async function GET(req: Request) {
+  if (!(await storeAvailable())) return unavailable();
   const { searchParams } = new URL(req.url);
-  const parsed = actorSchema.extend({}).safeParse({
+  const parsed = actorSchema.safeParse({
     id: searchParams.get("actorId"),
     role: searchParams.get("role"),
     classId: searchParams.get("classId") ?? undefined,
@@ -68,14 +74,14 @@ export async function GET(req: Request) {
 
 // POST /api/support — learner tạo yêu cầu (coach không tạo).
 export async function POST(req: Request) {
+  if (!(await storeAvailable())) return unavailable();
   const parsed = createSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
     return Response.json({ code: "INVALID_BODY", issues: parsed.error.issues }, { status: 400 });
-  const { actor, ...rest } = parsed.data;
+  const { actor, clientId, ...rest } = parsed.data;
   if (actor.role !== "learner")
     return forbidden("Chỉ học viên tạo yêu cầu hỗ trợ (coach dùng trả lời/đổi trạng thái).");
-  // Kiểm tra mapping nguồn trước khi lưu: document + trang đã biết phải khớp
-  // Chương/Bài/Part khai báo (chống note gán sai nguồn như bug trang 6).
+  // Kiểm tra mapping nguồn trước khi lưu.
   if (rest.documentId === SAMPLE_DOC_ID && rest.page) {
     const r = resolveSource(rest.documentId, rest.page);
     if (r && (r.lessonId !== rest.lessonId || r.partId !== rest.partId))
@@ -87,21 +93,33 @@ export async function POST(req: Request) {
         { status: 400 },
       );
   }
-  const now = new Date().toISOString();
-  const r: SupportRequest = {
-    id: newClientOperationId(),
-    learnerId: actor.id,
-    status: "moi",
-    replies: [],
-    createdAt: now,
-    ...rest,
-  };
-  if (r.crop && !r.crop.startsWith("data:image/"))
+  if (rest.crop && !rest.crop.startsWith("data:image/"))
     return Response.json({ code: "INVALID_IMAGE", message: "Crop phải là dataURL ảnh." }, { status: 400 });
   let all: SupportRequest[];
   try {
     all = await loadSupport();
-    all.unshift(r);
+  } catch {
+    return unavailable();
+  }
+  // Idempotent retry: id đã có → trả bản hiện có, không tạo trùng.
+  if (clientId) {
+    const dup = all.find((x) => x.id === clientId);
+    if (dup) return Response.json({ mode: "server", request: dup, deduped: true });
+  }
+  const now = new Date().toISOString();
+  const r: SupportRequest = {
+    id: clientId ?? `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
+    learnerId: actor.id,
+    status: "moi",
+    replies: [],
+    createdAt: now,
+    rev: 1,
+    coachUnread: true,
+    learnerUnread: false,
+    ...rest,
+  };
+  all.unshift(r);
+  try {
     await saveSupport(all);
   } catch {
     return unavailable();
@@ -111,6 +129,7 @@ export async function POST(req: Request) {
 
 // PATCH /api/support — đổi trạng thái (chỉ coach đúng lớp).
 export async function PATCH(req: Request) {
+  if (!(await storeAvailable())) return unavailable();
   const parsed = z
     .object({
       actor: actorSchema,
@@ -132,6 +151,8 @@ export async function PATCH(req: Request) {
   if (!canSetStatus(r, actor as Actor))
     return forbidden("Chỉ coach đúng lớp được đổi trạng thái (đã kiểm tra ở backend).");
   r.status = status;
+  r.rev += 1;
+  r.coachUnread = false;
   try {
     await saveSupport(all);
   } catch {

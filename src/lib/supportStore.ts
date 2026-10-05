@@ -31,10 +31,27 @@ export interface SupportRequest {
   crop?: string;
   noteId?: string;
   docVersion?: string;
+  // rev tăng mỗi lần trả lời/đổi trạng thái — client merge lấy bản rev cao hơn.
+  rev: number;
+  coachUnread: boolean;
+  learnerUnread: boolean;
 }
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "support.json");
+
+// Kho file chỉ dùng được khi filesystem ghi thật. Trên Vercel (biến VERCEL=1,
+// filesystem ephemeral/read-only) kho này KHÔNG dùng được → routes trả 503
+// để client ngã local trung thực (không bao giờ ghi đè local bằng [] rỗng).
+export async function storeAvailable(): Promise<boolean> {
+  if (process.env.VERCEL) return false;
+  try {
+    await mkdir(DATA_DIR, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function loadSupport(): Promise<SupportRequest[]> {
   try {
