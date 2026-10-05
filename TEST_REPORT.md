@@ -130,6 +130,7 @@ trang giữa chừng (đổi sang nhảy tức thì).
 | R-KEEP | Reload → tìm/reorder/mở nguồn | PASS | found=1, đúng tr.6, header Bài 3 |
 | R-CONSOLE | pageerror | PASS | 0 |
 | R-PERM-SRC | Support sai mapping lesson/part | PASS — API | 400 MAPPING_MISMATCH (verify cùng đợt F-PERM) |
+| R-PROD | Production sau push `7237f6a`: homepage + health | PASS | `/` render cây phân cấp đúng (seed tr.4/7/10 đúng nhóm), có nút Cuộn dọc + handle + badge; `/api/health` ok `aiMode:mock`. Tạo note mới trên production do người dùng thực hiện trên browser của mình (localStorage theo trình duyệt; luồng tạo đã pass e2e local R-CREATE/R-HL/R-CONT) |
 | T34 | URL Vercel `https://prototype-wine-one.vercel.app/` truy cập trực tiếp, assets HTTPS + quyền hợp lệ | PASS | `/` render đủ khóa/bài/note/tab; `/api/health` ok `aiMode:mock`; chat/summarize/mindmap/vision 200 `mode:mock`, kb `ingested:sample.pdf` |
 | API-mock | chat/summarize/mindmap/vision không key | PASS — MOCK | 200 `mode:mock` cả 4 (chat 2 sources, draft 594 ký tự, 3 nodes, vision nhãn mô phỏng) |
 
